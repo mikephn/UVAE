@@ -200,12 +200,9 @@ class UVAE:
             b.index()
 
         for proj in self.constraintsType(Projection):
-            proj.embedding = encoders
+            proj.encoder.embedding = encoders
             if (proj.func is None) or overwrite or reload:
                 proj.in_dim = self.latent_dim
-                if len(proj.masks) == 0:
-                    for data in self.autoencoders:
-                        proj.addMask(data, np.ones(len(data.X), dtype=bool))
                 proj.build()
 
         if not overwrite:
@@ -242,6 +239,8 @@ class UVAE:
             b_order = b_order[:lim_b]
         # to accumulate loss * constraint weight
         weighed_loss = 0
+        if UVAE_DEBUG:
+            print('Training epoch: {}'.format(self.history.epoch))
 
         for b_id, c_n in enumerate(b_order):
             # get the constraint to be trained in this batch
@@ -344,7 +343,7 @@ class UVAE:
                 if len(combinedMap) == 0:
                     continue
                 if UVAE_DEBUG:
-                    print('Resampling prediction ({}): '.format(clsf.name), [len(combinedMap[d]) for d in combinedMap])
+                    print('Predicting ({}): '.format(clsf.name), [len(combinedMap[d]) for d in combinedMap])
                 called = clsf.predictMap(combinedMap)
                 ref = Classification(None)
                 for data in called:
@@ -394,13 +393,15 @@ class UVAE:
             self.build()
         emb = {}
         for data in dataMap:
-            emb[data] = self.autoencoders[data].predictMap({data: dataMap[data]}, mean=mean, bs=bs)[data]
+            emb[data] = self.autoencoders[data].encoder.predictMap({data: dataMap[data]}, mean=mean, bs=bs)[data]
         if stacked:
             emb = np.array(np.concatenate(list(emb.values())))
         return emb
 
-    def mergedPredictMap(self, dataMap, embeddings:list, uniform=True, prop=0.5, stacked=False):
+    def mergedPredictMap(self, dataMap, embeddings:list=None, uniform=True, prop=0.5, stacked=False):
         embs_own = self.predictMap(dataMap, mean=True)
+        if embeddings is None or len(embeddings) == 0:
+            return embs_own
         embs = {dt: [[samp] for samp in embs_own[dt]] for dt in embs_own}
         for e in embeddings:
             e_map = {dt: np.arange(len(e.masks[dt]))[e.masks[dt]] for dt in e.masks}
@@ -441,39 +442,30 @@ class UVAE:
 
     def reconstruct(self, dataMap, channels=None, bs=1024, stacked=False, mean=True):
         rec = {}
-        for data in dataMap:
-            n_batches = int(np.ceil(len(dataMap[data]) / bs))
-            p_cat = []
-            for n_b in range(n_batches):
-                b_inds = dataMap[data][int(n_b * bs):int((n_b + 1) * bs)]
-                dm = {data: b_inds}
-                if channels is None:
-                    b_rec = self.autoencoders[data].decoder.predictMap(dm, mean=mean, stacked=True)
-                else:
-                    _, Zs = self.autoencoders[data].encoder.embedMap(dm, mean=mean)
-                    b_rec = self.mergedDecode(Zs[data], channels)
-                p_cat.append(b_rec)
-            rec[data] = np.vstack(p_cat)
+        for d in dataMap:
+            p_dm = {d: dataMap[d]}
+            if channels is None:
+                rec[d] = self.autoencoders[d].decoder.predictMap(p_dm, mean=mean, bs=bs)[d]
+            else:
+                useDecoders = {}
+                for data in self.autoencoders:
+                    if len(set(channels).intersection(set(data.channels))):
+                        useDecoders[data] = self.autoencoders[data].decoder
+                if not len(useDecoders):
+                    print('Error: no decoders contain specified channels.')
+                    return None
+                accum = {ch: [] for ch in channels}
+                for data, dec in useDecoders.items():
+                    r = dec.predictMap(p_dm, mean=mean, bs=bs)[d]
+                    for ci, ch in enumerate(data.channels):
+                        if ch in accum:
+                            accum[ch].append(r[:, ci])
+                means = [np.mean(accum[ch], axis=0) for ch in accum]
+                rec[d] = np.transpose(np.array(means))
         if stacked:
             return np.array(np.concatenate(list(rec.values())))
         return rec
 
-    def mergedDecode(self, Z, channels):
-        useDecoders = {}
-        for data in self.autoencoders:
-            if len(set(channels).intersection(set(data.channels))):
-                useDecoders[data] = self.autoencoders[data].decoder.func
-        if not len(useDecoders):
-            print('Error: no decoders contain specified channels.')
-            return None
-        accum = {ch: [] for ch in channels}
-        for data, dec in useDecoders.items():
-            rec = dec.predict(Z)
-            for ci, ch in enumerate(data.channels):
-                if ch in accum:
-                    accum[ch].append(rec[:, ci])
-        means = [np.mean(accum[ch], axis=0) for ch in accum]
-        return np.transpose(means)
 
     def addConstraint(self, const):
         if type(const) is Data:

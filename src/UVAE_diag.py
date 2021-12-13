@@ -6,7 +6,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
-def plotsCallback(uv, doUmap=False, outFolder=None, n_samples=20000, dataMap=None, mapOf='2D', toEmbed:list=None, avg=False, rand=False, prop=0.5, um=None, ep=None):
+def plotsCallback(uv, doUmap=False, outFolder=None, n_samples=20000, dataMap=None, mapOf='2D', embeddings:list=None, um=None, ep=None):
     if outFolder is None:
         outFolder = os.path.dirname(uv.path) + '/'
     ensureFolder(outFolder)
@@ -29,15 +29,15 @@ def plotsCallback(uv, doUmap=False, outFolder=None, n_samples=20000, dataMap=Non
     if uv.history is not None and ep is None:
         ep = uv.history.epoch
 
-    if type(toEmbed) is list and (avg or rand):
-        embs = uv.mergedPredictMap(d, embeddings=toEmbed, uniform=rand, prop=prop)
+    if type(embeddings) is list:
+        embs = uv.mergedPredictMap(d, embeddings=embeddings)
         concat = []
         for data in embs:
             concat.append(embs[data])
             emb_cat = np.concatenate(concat)
     else:
-        if toEmbed is not None:
-            emb = toEmbed.predictMap(d, mean=True)
+        if embeddings is not None:
+            emb = embeddings.predictMap(d, mean=True)
         else:
             emb = uv.predictMap(d, mean=True)
         emb_cat = np.vstack([emb[d] for d in emb])

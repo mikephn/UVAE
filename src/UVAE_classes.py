@@ -51,6 +51,11 @@ class Data(Hashable):
             self.valMask[:n_val] = True
             np.random.shuffle(self.valMask)
 
+    def Xn(self):
+        if self.normed is None:
+            return self.X
+        else:
+            return self.normed
 
 class DataMap(dict):
     def __setitem__(self, key, value):
@@ -230,7 +235,10 @@ class Control(Mapping):
 
     def balance(self, prediction, prop=1.0):
         inds = self.inds(validation=False, controls=True, resampled=False)
-        P_cats = [self.stack(p) for p in prediction]
+        if type(prediction) is not list:
+            P_cats = [self.stack(prediction)]
+        else:
+            P_cats = [self.stack(p) for p in prediction]
         res_inds = self.resampledInds(P_cats, prop=prop)
         self._resampled = inds[res_inds]
 
@@ -748,7 +756,7 @@ class Autoencoder(Serial):
                                  conditions=self.conditions)
 
         self.func = keras.Model([inp] + ins, self.decoder.func([z]+ins))
-        self.decoder.embedding = {dt: self.encoder for dt in self.embedding}
+        self.decoder.embedding = {dt: self.encoder for dt in self.masks}
 
     def archive(self):
         d = super(Autoencoder, self).archive()
@@ -876,10 +884,6 @@ class Projection(Autoencoder):
         super().__init__(latent_dim=latent_dim,
                          variational=variational,
                          trainEmbedding=trainEmbedding, **kwargs)
-
-    def build(self):
-        super().build()
-        self.encoder.embedding = self.embedding
 
 
 class Normalization(Classification):
