@@ -204,6 +204,26 @@ mmd = uv + MMD(Y={p0: B0}, name='MMD_batch')
 
 Any autoencoder can be made conditional in this way. Also, more than one conditioning can be specified simultaneously, each containing multiple classes. *Note*: most CVAE implementations add conditioning to both encoder, and decoder. UVAE conditions the decoder only.
 
+To change the target batch for generation edit the *Labeling* constraint provided as conditioning before calling any reconstruction method. For example, to generate everything in the style of the first batch, set it as target for all the samples:
+
+```python
+target = batch.enum[0]
+batch.targets = {p0: np.repeat(target, len(p0.X))}
+```
+
+The **reconstruct()** function has two modes of operation. If no *channels* are specified, each sample from the requested map is generated from the corresponding autoencoder. If *channels* are specified, each sample is first encoded by its panel encoder, then generated from all the decoders which support requested channels, and averaged. This allows for cross-modal generation and imputation of missing markers.
+
+E.g. to impute all available markers for all samples:
+
+```python
+# map covering all data
+all_samples = uv.allDataMap()
+# combined markers from all modalities
+all_markers = np.unique(np.concatenate([d.channels for d in all_samples]))
+# generate all markers for every sample by averaging decoders across modalities
+rec_imputed = uv.reconstruct(all_samples, channels=all_markers)
+```
+
 ### Hyper-parameter tuning
 
 Hyper-parameters such as model size, learning rates (separate for *unsupervised*, *supervised*, and *merge* losses), mutual frequency of training of each constraint, as well as *pull* strength can be automatically determined using *mango* Bayesian optimiser. The ranges and default values can be adjusted in *UVAE_hyper.py*. Each constraint has a *weight* parameter, which can be used to adjust its importance for model selection only. Optimisation is done by calling the instantiated UVAE object (after adding all required data and constraints):
