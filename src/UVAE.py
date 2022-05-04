@@ -39,8 +39,6 @@ class UVAE:
             self.optimizers['unsupervised'] = keras.optimizers.Adam(0.001*float(self.hyperparams()['lr_unsupervised']))
             self.optimizers['supervised'] = keras.optimizers.Adam(0.001*float(self.hyperparams()['lr_supervised']))
             self.optimizers['merge'] = keras.optimizers.Adam(0.001*float(self.hyperparams()['lr_merge']))
-        if self.history is not None and verbose:
-            self.archives['histories'].append(self.history.history)
         if valSamplesPerEpoch > 0: # check here if val data is available
             self.history = History(earlyStop=earlyStopEpochs, earlyStopKey='val_loss')
         else:
@@ -79,6 +77,7 @@ class UVAE:
             if isinstance(c, Autoencoder):
                 c.encoder.trained = True
         self.loadParams()
+        self.archives['histories'].append(self.history.history)
         self.archive()
         return self.history
 
@@ -208,6 +207,7 @@ class UVAE:
         if not overwrite:
             self.loadParams()
         self.built = True
+        self.hyper = hyper
 
     def propagate(self, validation=False, batchSize=128, sampleLimit=0, skipTrained=True):
         # get constraints trainable by backprop
@@ -624,6 +624,8 @@ class UVAE:
         if const.name in self.constraints:
             existing = self.constraints[const.name]
             existing.masks.update(const.masks)
+            if hasattr(const, 'Y'):
+                existing.Y.update(const.Y)
             if hasattr(const, 'targets'):
                 existing.targets.update(const.targets)
             existing.controlMasks.update(const.controlMasks)
