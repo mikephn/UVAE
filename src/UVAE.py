@@ -51,8 +51,9 @@ class UVAE:
             if h is None:
                 print('Nothing to train.')
                 return self.history
-            self.resample()
-            self.updateOffsets()
+            ease_prop = min(1.0, ep / float(self.hyperparams()['ease_epochs']))
+            self.resample(resample_prop=ease_prop)
+            self.updateOffsets(correction_prop=ease_prop)
             if valSamplesPerEpoch > 0:
                 self.propagate(validation=True, batchSize=self.hyperparams()['batch_size'], sampleLimit=valSamplesPerEpoch)
             self.history.accumulate(sum=False)
@@ -322,9 +323,8 @@ class UVAE:
 
         return self.history
 
-    def resample(self):
+    def resample(self, resample_prop=1.0):
         if len(self.resamplings):
-            resample_prop = min(1.0, self.history.epoch / float(self.hyperparams()['ease_epochs']))
             # predict merged targets for each classifier
             targetMaps = {}
             targetResults = {}
@@ -365,8 +365,7 @@ class UVAE:
             for target in targetResults:
                 target.balance(targetResults[target], prop=resample_prop)
 
-    def updateOffsets(self):
-        correction_prop = min(1.0, self.history.epoch / float(self.hyperparams()['ease_epochs']))
+    def updateOffsets(self, correction_prop=1.0):
         norm_cs = self.constraintsType(Normalization) + self.constraintsType(Standardization)
         for c in norm_cs:
             if c.trained == False:

@@ -430,7 +430,10 @@ class Serial(Constraint):
 class Regression(Serial):
     def __init__(self, Y=None, targets=None, nullLabel=None, trainEmbedding=True, **kwargs):
         super().__init__(trainEmbedding=trainEmbedding, **kwargs)
-        self.Y = Y
+        if Y is None:
+            self.Y = {}
+        else:
+            self.Y = Y
         self.nullLabel = nullLabel
         self.targets = {}
         if targets is not None:
@@ -985,7 +988,10 @@ class Normalization(Classification):
         batchZs = {b_id: [] for b_id in self.enum}
         for data in Map:
             if data in encoders:
-                Zs = encoders[data].predictMap({data: Map[data]}, mean=True)
+                enc = encoders[data]
+                if self in enc.offsets:
+                    del enc.offsets[self]
+                Zs = enc.predictMap({data: Map[data]}, mean=True)
                 Z = Zs[data]
                 for b_i, b_name in enumerate(batchZs):
                     bZ = Z[np.array(Bs[data][:, b_i], dtype=bool)]
@@ -1001,10 +1007,7 @@ class Normalization(Classification):
             target = np.mean(list(means.values()), axis=0)
         offsets = {b_id: (means[b_id] - target)*prop for b_id in means}
         for enc in encoders.values():
-            if self in enc.offsets:
-                enc.offsets[self].update(offsets)
-            else:
-                enc.offsets[self] = offsets
+            enc.offsets[self] = offsets
 
 
 class Standardization(Normalization):
