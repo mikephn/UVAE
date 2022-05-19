@@ -602,18 +602,36 @@ class Encoder(Serial):
         super().__init__(**kwargs)
         self.channels = channels
         self.channelMaps = channelMaps
+        self.condFuncs = {}
 
-    def build(self, in_dim, n_dense, relu_slope, dropout, depth, out_len, categorical=False):
+    def build(self, in_dim, n_dense, relu_slope, dropout, depth, out_len, variational=False, categorical=False, condFuncs=None):
         inp = Input((int(in_dim),))
+        self.condFuncs = condFuncs
+        c_ins = []
+        if len(self.condFuncs) == 0:
+            in_cat = inp
+        else:
+            ins = [inp]
+            for c_func in self.condFuncs.values():
+                c_ins.append(c_func.input)
+                ins.append(c_func.output)
+            in_cat = tf.concat(ins, axis=-1)
         enc = MLP(n_dense=n_dense,
                   relu_slope=relu_slope,
                   dropout=dropout,
                   depth=depth,
                   out_len=out_len)
-        z = enc(inp)
-        if categorical:
-            z = keras.layers.Activation('softmax')(z)
-        self.func = keras.Model(inp, z, name=self.name)
+        if variational:
+            enc = GaussianEncoder(encoder=enc,
+                                  latent_len=out_len,
+                                  input_len=out_len)
+            z_mean, z_log_var, z = enc(in_cat)
+            self.func = keras.Model([inp] + c_ins, [z_mean, z_log_var, z], name=self.name)
+        else:
+            z = enc(in_cat)
+            if categorical:
+                z = keras.layers.Activation('softmax')(z)
+            self.func = keras.Model([inp] + c_ins, z, name=self.name)
         return inp, z
 
     # obtain representation for input, selected channels only
@@ -624,26 +642,27 @@ class Encoder(Serial):
                 Xs[data] = tf.gather(Xs[data], self.channelMaps[data], axis=-1)
         return Xs
 
+    def embedMap(self, dataMap, mean=False):
+        ins = self.getInput(dataMap, mean)
+        outs = {}
+        for data in dataMap:
+            enc_inp = [ins[data]]
+            if len(self.condFuncs):
+                cs = [c.predictMap({data: dataMap[data]}, stacked=True, mean=True, called=False)
+                      for c in self.condFuncs]
+                enc_inp.extend(cs)
+            outs[data] = self.predict(enc_inp, mean=mean)
+        return ins, outs
+
 
 class Unbiasing(Encoder):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.offsets = {}
 
-    def build(self, in_dim, n_dense, relu_slope, dropout, depth, out_len, categorical=False):
+    def build(self, **kwargs):
         self.offsets = {}
-        inp = Input((int(in_dim),))
-        enc = MLP(n_dense=n_dense,
-                  relu_slope=relu_slope,
-                  dropout=dropout,
-                  depth=depth,
-                  out_len=out_len)
-        enc = GaussianEncoder(encoder=enc,
-                              latent_len=out_len,
-                              input_len=out_len)
-        z_mean, z_log_var, z = enc(inp)
-        self.func = keras.Model(inp, [z_mean, z_log_var, z], name=self.name)
-        return inp, z
+        return super(Unbiasing, self).build(**kwargs)
 
     def predict(self, X, mean=False):
         m, v, z = self.func(X)
@@ -680,25 +699,19 @@ class Unbiasing(Encoder):
 class Decoder(Serial):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.conditions = None
+        self.condFuncs = {}
 
-    def build(self, in_dim, n_dense, relu_slope, dropout, depth, out_len, conditions=None):
-        self.conditions = conditions
+    def build(self, in_dim, n_dense, relu_slope, dropout, depth, out_len, condFuncs=None):
+        self.condFuncs = condFuncs
         z_inp = Input((int(in_dim),))
-        ins = []
-        if self.conditions is None:
+        c_ins = []
+        if len(self.condFuncs) == 0:
             z_cat = z_inp
         else:
             zs = [z_inp]
-            for c_len in [c.outputDim() for c in self.conditions]:
-                c_in = Input((c_len,))
-                ins.append(c_in)
-                emb = MLP(n_dense=128,
-                          relu_slope=relu_slope,
-                          dropout=dropout,
-                          depth=1,
-                          out_len=20)
-                zs.append(emb(c_in))
+            for c_func in self.condFuncs.values():
+                c_ins.append(c_func.input)
+                zs.append(c_func.output)
             z_cat = tf.concat(zs, axis=-1)
         dec = MLP(n_dense=n_dense,
                   relu_slope=relu_slope,
@@ -706,18 +719,18 @@ class Decoder(Serial):
                   depth=depth,
                   out_len=int(out_len))
         out = dec(z_cat)
-        self.func = keras.Model([z_inp] + ins, out, name=self.name)
+        self.func = keras.Model([z_inp] + c_ins, out, name=self.name)
         self.loss = keras.losses.MSE
-        return z_inp, ins, out
+        return z_inp, c_ins, out
 
     def embedMap(self, dataMap, mean=False):
         ins = self.getInput(dataMap, mean)
         outs = {}
         for data in dataMap:
             dec_inp = [ins[data]]
-            if self.conditions is not None:
+            if len(self.condFuncs):
                 cs = [c.predictMap({data: dataMap[data]}, stacked=True, mean=True, called=False)
-                      for c in self.conditions]
+                      for c in self.condFuncs]
                 dec_inp.extend(cs)
             outs[data] = self.func(dec_inp)
         return ins, outs
@@ -731,6 +744,7 @@ class Autoencoder(Serial):
         self.variational = variational
         self.categorical = categorical
         self.conditions = conditions
+        self.condFuncs = {}
         if self.variational:
             self.encoder = Unbiasing(name=self.name + '-encoder')
         else:
@@ -742,29 +756,44 @@ class Autoencoder(Serial):
         hyper = self.hyperparams()
         if self.latent_dim is None:
             self.latent_dim = hyper['latent_dim']
+        if self.conditions is not None:
+            for c in self.conditions:
+                c_len = c.outputDim()
+                c_in = Input((c_len,))
+                emb = MLP(n_dense=256,
+                          depth=1,
+                          out_len=10,
+                          dropout=0)
+                self.condFuncs[c] = keras.Model(c_in, emb(c_in))
+
         inp, z = self.encoder.build(in_dim=self.in_dim,
                                     n_dense=hyper['width'],
                                     relu_slope=hyper['relu_slope'],
                                     dropout=hyper['dropout'],
                                     depth=hyper['hidden'],
                                     out_len=self.latent_dim,
-                                    categorical=self.categorical)
+                                    variational=self.variational,
+                                    categorical=self.categorical,
+                                    condFuncs=self.condFuncs)
 
-        z_inp, ins, out = self.decoder.build(in_dim=self.latent_dim,
+        z_inp, c_ins, out = self.decoder.build(in_dim=self.latent_dim,
                                  n_dense=hyper['width'],
                                  relu_slope=hyper['relu_slope'],
                                  dropout=hyper['dropout'],
                                  depth=hyper['hidden'],
                                  out_len=int(self.in_dim),
-                                 conditions=self.conditions)
+                                 condFuncs=self.condFuncs)
 
-        self.func = keras.Model([inp] + ins, self.decoder.func([z]+ins))
+        self.func = keras.Model([inp] + c_ins, self.decoder.func([z]+c_ins))
         self.decoder.embedding = {dt: self.encoder for dt in self.masks}
 
     def archive(self):
         d = super(Autoencoder, self).archive()
         d['input'] = {data.name: data.channels for data in self.masks}
-        d['in_dim'] = int(self.encoder.func.input.shape[-1])
+        if type(self.encoder.func.input) is list:
+            d['in_dim'] = int(self.encoder.func.input[0].shape[-1])
+        else:
+            d['in_dim'] = int(self.encoder.func.input.shape[-1])
         d['latent_dim'] = self.latent_dim
         d['variational'] = self.variational
         d['categorical'] = self.categorical
