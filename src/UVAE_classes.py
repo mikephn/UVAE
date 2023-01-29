@@ -1269,6 +1269,39 @@ class History:
         return s
 
 
+class LisiValidationSet:
+    def __init__(self, dm:DataMap,
+                 batchConstraint:Labeling,
+                 labelConstraint:Labeling,
+                 normClasses=False,
+                 perplexity=30,
+                 batchRange=None,
+                 labelRange=None,
+                 batchWeight=1.0,
+                 labelWeight=1.0):
+        self.dm = dm
+        self.normClasses = normClasses
+        self.perplexity = perplexity
+        self.batchWeight = batchWeight
+        self.labelWeight = labelWeight
+        self.batchConstraint = batchConstraint
+        self.labelConstraint = labelConstraint
+        self.batchRange = batchRange
+        self.labelRange = labelRange
+        self.batch = None
+        self.labeling = None
+
+    def update(self):
+        self.batch = self.batchConstraint.predictMap(self.dm, stacked=True)
+        self.labeling = self.labelConstraint.predictMap(self.dm, stacked=True)
+        if self.batchRange is None:
+            self.batchRange = (1, len(set(self.batch)))
+        if self.labelRange is None:
+            self.labelRange = (1, len(set(self.labeling)))
+
+
+
+
 class ModelSelectionHistory:
     def __init__(self, source):
         self.source = source
