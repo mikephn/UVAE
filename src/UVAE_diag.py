@@ -157,6 +157,99 @@ def filterClusters(uv, clustering, subset, subsample=0):
     return subset_map
 
 
+def classNormalizationMask(batches, labels):
+    cts = {}
+    bs = list(set(batches))
+    ls = list(set(labels))
+    for c in ls:
+        b_cts = []
+        for b in bs:
+            mask = np.logical_and(labels == c, batches == b)
+            b_cts.append(np.sum(mask))
+        cts[c] = b_cts
+    min_counts = {c: np.min(cts[c]) for c in cts}
+    valid_mask = np.zeros(len(labels), dtype=bool)
+    for c in cts:
+        if min_counts[c] > 0:
+            for b in bs:
+                mask = np.logical_and(labels == c, batches == b)
+                inds = np.arange(len(mask))[mask]
+                inds_subsample = np.random.permutation(inds)[:min_counts[c]]
+                valid_mask[inds_subsample] = True
+    return valid_mask
+
+
+def calculateLISI(emb, batches, name, outFolder, classes, normClass=False, perplexity=30, scoreFilename='LISI_scores.csv'):
+    types = ['batch']
+    meta = batches
+    if type(classes) is dict:
+        for k in classes:
+            types.append(k)
+            meta = np.column_stack([meta, classes[k]])
+    else:
+        types.append('class')
+        meta = np.column_stack([meta, classes])
+    if normClass and type(classes) is np.ndarray:
+        normMask = classNormalizationMask(batches, classes)
+        meta = meta[normMask]
+        emb = emb[normMask]
+    try:
+        import harmonypy.lisi
+        meta_pd = pd.DataFrame(meta, columns=types)
+        result = harmonypy.lisi.compute_lisi(emb, meta_pd, types, perplexity)
+        res_med = np.median(result, axis=0)
+        score_row = pd.DataFrame([name]+list(res_med)).T
+        score_row.columns = ['name']+types
+        if fileExists(outFolder + scoreFilename):
+            scores = pd.read_csv(outFolder + scoreFilename)
+            scores = pd.concat([scores, score_row], axis=0, ignore_index=True)
+        else:
+            scores = score_row
+        scores.to_csv(outFolder + scoreFilename, index=False)
+        return dict(zip(types, res_med))
+    except ImportError as e:
+        head = ['d{}'.format(i) for i in range(emb.shape[1])] + types
+        arr = np.column_stack([emb, meta])
+        arr = np.vstack([head, arr])
+        path = outFolder + 'out-{}.csv'.format(name)
+        saveAsCsv(arr, path)
+        cmd = 'Rscript src/calculateLisi.R "{}" "{}" "{}" "{}"'.format(name,
+                                                                       path,
+                                                                       outFolder + scoreFilename,
+                                                                       int(perplexity))
+        for tp in types:
+            cmd += ' \"{}\"'.format(tp)
+        os.system(cmd)
+        removeFile(path)
+        if not fileExists(outFolder + scoreFilename):
+            return None
+        results = csvFile(outFolder + scoreFilename, remQuotes=True, remNewline=True)
+        header = results[0][1:]
+        thisResults = results[-1]
+        rowName = thisResults[0]
+        if rowName != name:
+            print('Error: LISI file name mismatch: {} instead of {}.'.format(rowName, name))
+            return None
+        rowScores = thisResults[1:]
+        res = {}
+        for i, tp in enumerate(header):
+            if rowScores[i] != 'NA':
+                res[header[i]] = float(rowScores[i])
+        return res
+
+
+def calculateEmdMad(uncorrectedFile, correctedFile, outPath):
+    cmd = 'Rscript src/calculateEmdMad.R {} {} {}'.format(uncorrectedFile, correctedFile, outPath)
+    os.system(cmd)
+    if not fileExists(outPath):
+        return None
+    results = csvFile(outPath, remQuotes=True, remNewline=True)
+    vals = results[-1]
+    emd = float(vals[2])
+    mad = float(vals[3])
+    return emd, mad
+
+
 def plotResult(uv, um, dm, result, path=None, title='', refLabs=None):
     emb = uv.predictMap(dm, mean=True)
     um_emb = um.transform(stack(emb))

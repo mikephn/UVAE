@@ -82,13 +82,15 @@ class UVAE:
         return self.history
 
     def optimize(self, iterations=20, maxEpochs=30, earlyStopEpochs=0,
-                            samplesPerEpoch=100000, valSamplesPerEpoch=100000,
-                            sizeSeparately=True, overwriteIfBest=False):
+                 samplesPerEpoch=100000, valSamplesPerEpoch=100000,
+                 subset=None, sizeSeparately=False, lossWeight=1.0,
+                 lisiValidationSet=None, customLoss=None, callback=None):
         left = self.msHistory.addIterations(iterations)
         if left > 0:
             optimizeHyperparameters(self.msHistory, iterations=left, maxEpochs=maxEpochs, earlyStopEpochs=earlyStopEpochs,
                                     samplesPerEpoch=samplesPerEpoch, valSamplesPerEpoch=valSamplesPerEpoch,
-                                    sizeSeparately=sizeSeparately, overwriteIfBest=overwriteIfBest)
+                                    subset=subset, sizeSeparately=sizeSeparately, lossWeight=lossWeight,
+                                    lisiValidationSet=lisiValidationSet, customLoss=customLoss, callback=callback)
 
     def archive(self, path=None):
         if path is None:
