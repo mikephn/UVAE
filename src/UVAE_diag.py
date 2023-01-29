@@ -73,7 +73,7 @@ def plotsCallback(uv, doUmap=False, outFolder=None, n_samples=20000, dataMap=Non
             savePlot(um_emb, batch_ids, title='Batches (UMAP)',
                      path=ensureFolder(outFolder) + 'batches-{}-umap.png'.format(ep))
 
-    clsfs = [c for c in uv.constraints.values() if (type(c) is Classification)]
+    clsfs = [c for c in uv.constraints.values() if (type(c) in [Classification, Labeling])]
     for i, clsf in enumerate(clsfs):
         pred = clsf.predictMap(d, stacked=True)
         ref = None
@@ -85,12 +85,12 @@ def plotsCallback(uv, doUmap=False, outFolder=None, n_samples=20000, dataMap=Non
                      refLabs=ref, legend=True)
 
 
-def cachedUmap(path, dataFunc, n_dim=2):
+def cachedUmap(path, dataFunc, n_dim=2, **kwargs):
     if os.path.exists(path):
         return unpickle(path)
     um = umap.UMAP(n_components=n_dim)
-    dt = dataFunc()
-    um.fit(dt)
+    dt = dataFunc(**kwargs)
+    um.fit(np.array(dt, dtype=float))
     doPickle(um, path)
     return um
 
@@ -309,7 +309,7 @@ def plotLabels(uv, um, dm, labels, embeddings:list=None, path=None, title=''):
     savePlot(um_emb, p, path, title=title)
 
 
-def savePlot(emb, labs, path, refLabs=None, title=None, size=0.1, quantile=0.99999, legend=True, legendLoc='best', firstBlack=False, axlim=0):
+def savePlot(emb, labs, path, refLabs=None, title=None, size=0.1, quantile=0.99999, legend=True, legendLoc='best', firstBlack=False, axlim=0, lims=None, dpi=150):
     if labs is None:
         labs = np.repeat(0, len(emb))
         legend = False
@@ -360,15 +360,29 @@ def savePlot(emb, labs, path, refLabs=None, title=None, size=0.1, quantile=0.999
     if axlim > 0:
         plt.xlim([-axlim, axlim])
         plt.ylim([-axlim, axlim])
+    if lims is not None:
+        plt.xlim([lims[0], lims[1]])
+        plt.ylim([lims[2], lims[3]])
     plt.title(title)
     if path is None:
         plt.show()
     else:
         fig = plt.gcf()
         fig.show()
-        fig.savefig(path, dpi=150, bbox_inches='tight')
+        fig.savefig(path, dpi=dpi, bbox_inches='tight')
     plt.close()
 
+def padMissingMarkers(dmRec:dict, padWith=np.nan):
+    mks = list(np.unique(np.concatenate([d.channels for d in dmRec])))
+    paddedDm = {}
+    for d in dmRec:
+        d_len = len(dmRec[d])
+        arr = np.ones((d_len, len(mks))) * padWith
+        for ci, ch in enumerate(d.channels):
+            ch_col = mks.index(ch)
+            arr[:, ch_col] = dmRec[d][:, ci]
+        paddedDm[d] = arr
+    return paddedDm, mks
 
 def saveMarkerPlot(X, emb, mks=None, path=None, quantile=0.999, skip=(), plotSize=4):
     xmin = np.quantile(emb[:, 0], 1-quantile)
@@ -377,17 +391,8 @@ def saveMarkerPlot(X, emb, mks=None, path=None, quantile=0.999, skip=(), plotSiz
     ymax = np.quantile(emb[:, 1], quantile)
 
     if type(X) is dict and mks is None:
-        total_pts = np.sum([len(X[d]) for d in X])
-        mks = list(np.unique(np.concatenate([d.channels for d in X])))
-        arr = np.ones((total_pts, len(mks))) * np.nan
-        loc = 0
-        for d in X:
-            d_len = len(X[d])
-            for ci, ch in enumerate(d.channels):
-                ch_col = mks.index(ch)
-                arr[loc:loc+d_len, ch_col] = X[d][:, ci]
-            loc += d_len
-        X = arr
+        dX, mks = padMissingMarkers(X)
+        X = stack(dX)
 
     if len(X.shape) == 1 and len(mks) == 1:
         X = np.expand_dims(X, -1)
