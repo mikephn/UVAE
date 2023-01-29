@@ -93,13 +93,15 @@ class UVAE:
                                     lisiValidationSet=lisiValidationSet, customLoss=customLoss, callback=callback)
 
     def archive(self, path=None):
+        if not self.built:
+            self.build()
         if path is None:
             path = self.path
             a = self.archives
         else:
             a = dict(self.archives)
         a['hyper'] = self.hyper
-        a['msel'] = {'results': self.msHistory.results,
+        a['msel'] = {'results': self.msHistory.currentResults,
                      'pastResults': self.msHistory.pastResults}
         for ae in self.autoencoders.values():
             a['autoencoders'][ae.name] = ae.archive()
@@ -113,7 +115,7 @@ class UVAE:
         d = pickle.load(open(self.path, "rb"))
         self.archives = d
         self.hyper = d['hyper']
-        self.msHistory.results = d['msel']['results']
+        self.msHistory.currentResults = d['msel']['results']
         self.msHistory.pastResults = d['msel']['pastResults']
         for ae_name, ae_arch in d['autoencoders'].items():
             ae = Autoencoder(ae_name, variational=ae_arch['variational'])

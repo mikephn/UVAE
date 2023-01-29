@@ -141,6 +141,8 @@ class Mapping(Hashable):
 
     # converts global map to internal, or undefined if outside own mask
     def reverseMap(self, dataMap:DataMap, undefined=0):
+        if self._reverseMap is None:
+            self.index()
         map = {}
         for data in dataMap:
             if undefined == 0:
@@ -1271,18 +1273,27 @@ class ModelSelectionHistory:
     def __init__(self, source):
         self.source = source
         self.targetIterations = 0
-        self.results = []
+        self.currentResults = []
         self.pastResults = []
+
+    def results(self):
+        res = []
+        res.extend(self.currentResults)
+        for r in self.pastResults:
+            res.extend(r)
+        return res
+
+    def __len__(self):
+        return int(np.sum([len(r) for r in self.pastResults]) + len(self.currentResults))
 
     def addIterations(self, i):
         self.targetIterations += i
-        currentIterations = np.sum([len(r) for r in self.pastResults])
-        return self.targetIterations - currentIterations
+        return int(self.targetIterations - len(self))
 
     def compound(self):
-        if len(self.results):
-            self.pastResults.append(self.results)
-            self.results = []
+        if len(self.currentResults):
+            self.pastResults.append(self.currentResults)
+            self.currentResults = []
 
     def addResult(self, arr):
-        self.results.append(arr)
+        self.currentResults.append(arr)
