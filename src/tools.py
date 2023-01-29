@@ -101,13 +101,15 @@ def saveLatexTable(array, path, roundTo=3):
 
 
 def stack(dm, ref=None):
+    if type(dm) is np.ndarray:
+        return dm
     if ref is not None:
         cat = []
         for d in ref:
-            cat.append(dm[d])
+            if d in dm:
+                cat.append(dm[d])
         return np.array(np.concatenate(cat))
-    return np.array(np.concatenate(list(dm.values())))
-
+    return np.array(np.concatenate([v for v in list(dm.values()) if len(v)], axis=0))
 
 def unstack(arr, d):
     du = {}
