@@ -811,12 +811,14 @@ class Autoencoder(Serial):
         if self.conditions is not None:
             for c in self.conditions:
                 c_len = c.outputDim()
-                c_in = Input((c_len,))
-                emb = MLP(n_dense=256,
-                          depth=1,
-                          out_len=10,
-                          dropout=0)
-                self.condFuncs[c] = keras.Model(c_in, emb(c_in))
+                c_out = c_in = Input((c_len,))
+                if hyper['cond_dim'] > 0:
+                    emb = MLP(n_dense=hyper['cond_width'],
+                              depth=hyper['cond_hidden'],
+                              out_len=hyper['cond_dim'],
+                              dropout=0)
+                    c_out = emb(c_in)
+                self.condFuncs[c] = keras.Model(c_in, c_out)
 
         inp, z = self.encoder.build(in_dim=self.in_dim,
                                     n_dense=hyper['width'],
@@ -913,10 +915,6 @@ class Autoencoder(Serial):
             weighed_loss += kl_loss * self.encoder.weight * self.weight
             losses[self.name + '-rec'] = rec_loss
             losses[self.name] += kl_loss
-        return losses, weighed_loss, Zcat
-
-    def forward(self, inds):
-        losses, weighed_loss, _ = self.forwardAe(inds)
         return losses, weighed_loss
 
 
