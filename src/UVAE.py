@@ -449,23 +449,43 @@ class UVAE:
             return np.array(np.concatenate(list(embs.values())))
         return embs
 
-    def reconstruct(self, dataMap, channels=None, bs=1024, stacked=False, mean=True):
+    def reconstruct(self, dataMap, channels:[str]=None, decoderPanels:[Data]=None, conditions:{Labeling:[str]}=None, bs=1024, stacked=False, mean=True):
+        if not self.built:
+            self.build()
+        if channels is not None:
+            if len(set(channels)) != len(channels):
+                print('Error: channels must be a non-repeating list of channels matching the ones in Data.')
+                return None
         rec = {}
-        for d in dataMap:
-            p_dm = {d: dataMap[d]}
-            if channels is None:
-                rec[d] = self.autoencoders[d].decoder.predictMap(p_dm, mean=mean, bs=bs)[d]
+        if decoderPanels is None and channels is None: # predict just the original input channels
+            for d in dataMap:
+                p_dm = {d: dataMap[d]}
+                rec[d] = self.autoencoders[d].decoder.batchPrediction(p_dm, mean=mean, bs=bs, conditions=conditions)[d]
+        else: # predict specific channels by merging outputs of different decoders
+            if channels is None:  # use all channels of specified decoders
+                channels = sorted(list(set(np.concatenate([d.channels for d in decoderPanels]))))
+            if decoderPanels is None: # use all available decoders
+                candidateDecoders = {data: self.autoencoders[data].decoder for data in self.autoencoders}
+            else: # use only specified decoders
+                candidateDecoders = {data: self.autoencoders[data].decoder for data in decoderPanels}
+            useDecoders = {}
+            for data in candidateDecoders:
+                if len(set(channels).intersection(set(data.channels))):
+                    useDecoders[data] = candidateDecoders[data]
+            if not len(useDecoders):
+                print('Error: no decoders contain specified channels.')
+                return None
             else:
-                useDecoders = {}
-                for data in self.autoencoders:
-                    if len(set(channels).intersection(set(data.channels))):
-                        useDecoders[data] = self.autoencoders[data].decoder
-                if not len(useDecoders):
-                    print('Error: no decoders contain specified channels.')
+                foundChs = set(np.concatenate([d.channels for d in useDecoders]))
+                if not all([ch in foundChs for ch in channels]):
+                    diff = [ch for ch in channels if ch not in foundChs]
+                    print('Error: channels not found in specified decoders: {}'.format(diff))
                     return None
+            for d in dataMap:
+                p_dm = {d: dataMap[d]}
                 accum = {ch: [] for ch in channels}
                 for data, dec in useDecoders.items():
-                    r = dec.predictMap(p_dm, mean=mean, bs=bs)[d]
+                    r = dec.batchPrediction(p_dm, mean=mean, bs=bs, conditions=conditions)[d]
                     for ci, ch in enumerate(data.channels):
                         if ch in accum:
                             accum[ch].append(r[:, ci])
