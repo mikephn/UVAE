@@ -49,11 +49,12 @@ class UVAE:
             if h is None:
                 print('Nothing to train.')
                 return self.history
-            ease_prop = min(1.0, ep / float(self.hyperparams()['ease_epochs']))
-            self.resample(resample_prop=ease_prop)
-            self.updateOffsets(correction_prop=ease_prop)
+            ease_prop = min(1.0, ep / max(1.0, float(self.hyperparams()['ease_epochs'])))
+            self.resample(resample_prop=ease_prop, skipTrained=skipTrained)
+            self.updateOffsets(correction_prop=ease_prop, skipTrained=skipTrained)
             if valSamplesPerEpoch > 0:
-                self.propagate(validation=True, batchSize=self.hyperparams()['batch_size'], sampleLimit=valSamplesPerEpoch)
+                self.propagate(validation=True, batchSize=self.hyperparams()['batch_size'],
+                               sampleLimit=valSamplesPerEpoch, skipTrained=skipTrained)
             self.history.accumulate(sum=False)
             if verbose:
                 self.history.print()
@@ -321,7 +322,7 @@ class UVAE:
 
         return self.history
 
-    def resample(self, resample_prop=1.0):
+    def resample(self, resample_prop=1.0, skipTrained=True):
         if len(self.resamplings):
             # predict merged targets for each classifier
             targetMaps = {}
@@ -329,7 +330,7 @@ class UVAE:
             for clsf, targets in self.resamplings.items():
                 combinedMap = {}
                 for target in targets:
-                    if not target.trained:
+                    if not target.trained or not skipTrained:
                         t_inds = target.inds(validation=False, controls=True, resampled=False)
                         d_map = target.dataMap(t_inds)
                         targetMaps[target] = d_map
@@ -351,7 +352,7 @@ class UVAE:
                     ref.setTargets(data, called[data])
                 ref.index()
                 for target in targets:
-                    if not target.trained:
+                    if not target.trained or not skipTrained:
                         if UVAE_DEBUG:
                             print('Resampling:', target.name)
                         dmap = targetMaps[target]
@@ -363,10 +364,10 @@ class UVAE:
             for target in targetResults:
                 target.balance(targetResults[target], prop=resample_prop)
 
-    def updateOffsets(self, correction_prop=1.0):
+    def updateOffsets(self, correction_prop=1.0, skipTrained=True):
         norm_cs = self.constraintsType(Normalization) + self.constraintsType(Standardization)
         for c in norm_cs:
-            if c.trained == False:
+            if not c.trained or not skipTrained:
                 c.intervalsLeft -= 1
                 if c.intervalsLeft == 0:
                     c.intervalsLeft = c.interval
@@ -375,7 +376,8 @@ class UVAE:
                     if type(c) is Normalization:
                         # for data autoencoders
                         encoders = {data: self.autoencoders[data].encoder for data in
-                                    self.autoencoders if type(self.autoencoders[data].encoder) is Unbiasing}
+                                    self.autoencoders if type(self.autoencoders[data].encoder) is Unbiasing
+                                    and data in c.targets}
                         c.calculateBias(encoders, prop=correction_prop)
                         # for subspace autoencoders
                         for sub in self.constraintsType(Subspace):
