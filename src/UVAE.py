@@ -1,6 +1,4 @@
-import sys, os, pickle, time
-from src.UVAE_classes import *
-from src.UVAE_hyper import hyperDefault, optimizeHyperparameters
+from src.UVAE_hyper import *
 
 class UVAE:
     def __init__(self, path):
