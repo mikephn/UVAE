@@ -55,18 +55,16 @@ def csvFile(path, delimiter=',', remNewline=False, remQuotes=False):
     file = open(path, 'r')
     lines = file.readlines()
     contents = []
+    toStrip = ""
+    if remNewline:
+        toStrip += "\n"
+    if remQuotes:
+        toStrip += "\""
     for l in lines:
         comps = l.split(delimiter)
-        if remQuotes:
+        if len(toStrip):
             for cn in range(len(comps)):
-                if comps[cn].startswith('"'):
-                    comps[cn] = comps[cn][1:]
-                if comps[cn].endswith('"'):
-                    comps[cn] = comps[cn][:-1]
-        if remNewline:
-            if comps[-1].endswith('\n'):
-                comps[-1] = comps[-1][:-1]
-
+                comps[cn] = comps[cn].strip(toStrip)
         contents.append(comps)
     file.close()
     return contents
