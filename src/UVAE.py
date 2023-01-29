@@ -37,7 +37,7 @@ class UVAE:
             self.optimizers['unsupervised'] = keras.optimizers.Adam(0.001*float(self.hyperparams()['lr_unsupervised']))
             self.optimizers['supervised'] = keras.optimizers.Adam(0.001*float(self.hyperparams()['lr_supervised']))
             self.optimizers['merge'] = keras.optimizers.Adam(0.001*float(self.hyperparams()['lr_merge']))
-        if valSamplesPerEpoch > 0: # check here if val data is available
+        if valSamplesPerEpoch > 0:
             self.history = History(earlyStop=earlyStopEpochs, earlyStopKey='val_loss')
         else:
             self.history = History(earlyStop=earlyStopEpochs, earlyStopKey='loss')
@@ -226,21 +226,22 @@ class UVAE:
         n_batches = [c.length(batchSize, validation=validation) for c in constraints]
 
         if np.sum(n_batches) == 0:
+            if validation:
+                print('No validation samples. Please set valProp>0 when adding Data constraints.')
             return None
         # scale number of batches in training
         if not validation:
             for cn, const in enumerate(constraints):
                 if const.frequency != 1.0:
-                    n_batches[cn] = int(np.ceil(n_batches[cn] * const.frequency))
+                    n_batches[cn] = int(np.round(n_batches[cn] * const.frequency))
         # define current batch index and order of training proportional to number of batches
-        b_i = [0 for _ in n_batches]
         b_order = np.concatenate([np.repeat(n, n_batches[n]) for n in range(len(constraints))])
         np.random.shuffle(b_order)
         if sampleLimit > 0:
-            lim_b = int(sampleLimit/batchSize)
+            lim_b = max(1, int(sampleLimit/batchSize))
             b_order = b_order[:lim_b]
-        # to accumulate loss * constraint weight
-        weighed_loss = 0
+        # to accumulate constraint loss * constraint weight
+        weighed_losses = {c: [] for c in constraints}
         if UVAE_DEBUG:
             print('Training epoch: {}'.format(self.history.epoch))
 
@@ -253,8 +254,7 @@ class UVAE:
             # calculate loss tensors for the batch
             with tf.GradientTape(persistent=True) as tape:
                 losses, w_loss = const.forward(inds)
-                if not const.adversarial:
-                    weighed_loss += w_loss
+                weighed_losses[const].append(w_loss)
                 if const.adversarial and const.trainEmbedding:
                     losses[const.name+'-merge'] = -losses[const.name]
 
@@ -314,13 +314,19 @@ class UVAE:
                 else:
                     self.history.append('val_'+k, losses[k])
 
-            b_i[c_n] += 1
+        weighed_loss = 0
+        n_c = 0
+        for c in weighed_losses:
+            if not c.adversarial and len(weighed_losses[c]):
+                weighed_loss += np.nanmean(weighed_losses[c])
+                n_c += 1
+        weighed_loss /= n_c
 
         if validation:
-            self.history.append('val_loss', weighed_loss / len(b_order))
+            self.history.append('val_loss', weighed_loss)
         else:
             self.history.epoch += 1
-            self.history.append('loss', weighed_loss / len(b_order))
+            self.history.append('loss', weighed_loss)
 
         return self.history
 
