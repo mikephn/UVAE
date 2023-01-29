@@ -95,39 +95,51 @@ def cachedUmap(path, dataFunc, n_dim=2, **kwargs):
     return um
 
 
-def gmClustering(uv, dm=None, emb=None, comps=10, name='GM', cov='full', embeddings:list=None, path=None):
-    if path is not None:
-        if fileExists(path):
-            arch = unpickle(path)
-            gmm = GaussianMixture(n_components=len(arch['means']), covariance_type=cov)
-            gmm.precisions_cholesky_ = arch['cholesky']
-            gmm.weights_ = arch['weights']
-            gmm.means_ = arch['means']
-            gmm.covariances_ = arch['covs']
-            return gmm
-    elif name in uv.constraints and uv[name].trained:
-        return uv[name]
-    if emb is None:
-        if embeddings is None:
-            emb = uv.predictMap(dm, mean=True)
-        else:
-            if type(embeddings) is list:
-                emb = uv.mergedPredictMap(dm, embeddings)
-            else:
-                emb = embeddings.predictMap(dm, mean=True)
-    emb_cat = stack(emb)
-    gmm = GaussianMixture(n_components=comps, covariance_type=cov)
-    print('Fitting GM:', path)
-    clust_pred = gmm.fit_predict(emb_cat)
-    if path is None:
-        vals = repeatMasked(unstack(clust_pred, emb), dm, nullValue=-1)
-        gm_clust = uv + Classification(Y=vals, name=name, nullLabel=-1, trainEmbedding=False)
-        uv.train(maxEpochs=30, samplesPerEpoch=100000)
-        return gm_clust
+def gmmClustering(X, path, B=None, comps=[10], cov='full', subsample=100000):
+    if fileExists(path):
+        clst = unpickle(path)
+        print('Loaded GMM ({} models).'.format(len(clst)))
     else:
-        arch = {'means': gmm.means_, 'covs': gmm.covariances_, 'weights': gmm.weights_, 'cholesky': gmm.precisions_cholesky_}
-        doPickle(arch, path)
-        return gmm
+        clst = {}
+    if type(comps) is int:
+        comps = [comps]
+    results = []
+    for ci, n_c in enumerate(comps):
+        if B is None:
+            # cluster the data together
+            if ci not in clst:
+                gmm = GaussianMixture(n_components=n_c, covariance_type=cov)
+                if subsample > 0:
+                    sample = X[np.random.permutation(len(X))[:subsample]]
+                else:
+                    sample = X
+                print('Fitting GMM ({} comps).'.format(n_c))
+                gmm.fit(sample)
+                clst[ci] = gmm
+            results.append(clst[ci].predict(X))
+        else:
+            # cluster each batch independently
+            if ci not in clst:
+                clst[ci] = {}
+            batches = sorted(list(set(B)))
+            res = np.zeros(len(X), dtype=int)
+            for bi, b in enumerate(batches):
+                mask = B == b
+                b_X = X[mask]
+                if b not in clst[ci]:
+                    gmm = GaussianMixture(n_components=n_c, covariance_type=cov)
+                    if subsample > 0:
+                        sample = b_X[np.random.permutation(len(b_X))[:subsample]]
+                    else:
+                        sample = b_X
+                    print('Fitting GMM to batch {} ({} comps).'.format(b, n_c))
+                    gmm.fit(sample)
+                    clst[ci][b] = gmm
+                b_res = clst[ci][b].fit_predict(b_X)
+                res[mask] = b_res + int(bi * n_c)
+            results.append(res)
+    doPickle(clst, path)
+    return results
 
 
 def leidenClustering(emb)->np.ndarray:
