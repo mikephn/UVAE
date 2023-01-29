@@ -130,22 +130,16 @@ def gmClustering(uv, dm=None, emb=None, comps=10, name='GM', cov='full', embeddi
         return gmm
 
 
-def leidenClustering(uv, dm=None, name='Leiden', fitEpochs=0)->{Data: np.ndarray}:
-    emb = uv.predictMap(dm, mean=True, stacked=True)
+def leidenClustering(emb)->np.ndarray:
     print('Leiden clustering...')
     import scanpy as sc
     t = time.time()
     ad = sc.AnnData(emb)
     sc.pp.neighbors(ad)
     sc.tl.leiden(ad)
-    print('Clustering time: {}s'.format(int(time.time() - t)))
     clust_ld = np.array(ad.obs['leiden'].values, dtype=int)
-    clust_dm = unstack(clust_ld, dm)
-    if fitEpochs > 0:
-        dm_res = expandPrediction(clust_dm, dm, nullValue=-1)
-        clust = uv + Classification(Y=dm_res, name=name, nullLabel=-1, trainEmbedding=False)
-        uv.train(maxEpochs=fitEpochs)
-    return clust_dm
+    print('Clustering time: {}s, {} clusters.'.format(int(time.time() - t), len(set(clust_ld))))
+    return clust_ld
 
 
 def filterClusters(uv, clustering, subset, subsample=0):
