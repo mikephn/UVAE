@@ -981,12 +981,14 @@ class Projection(Autoencoder):
                          trainEmbedding=trainEmbedding, **kwargs)
 
 
-class Normalization(Classification):
-    def __init__(self, target=None, balanceBatchAvg=True, interval=1, **kwargs):
+class Normalization(Labeling):
+    def __init__(self, target=None, balanceBatchAvg=True, interval=1, useClasses:list=None, **kwargs):
         super().__init__(**kwargs)
         self.target = target
         self.interval = self.intervalsLeft = int(interval)
         self.balanceBatchAvg = balanceBatchAvg
+        self.useClasses = useClasses
+        self.trained = False
 
     def hyperparams(self):
         h = super(Normalization, self).hyperparams()
@@ -1018,6 +1020,8 @@ class Normalization(Classification):
             vals = vals_list[r_n]
             v_arr = np.array(vals)
             classes = list(set(v_arr))
+            if self.useClasses is not None:
+                classes = [c for c in classes if c in self.useClasses]
             if not self.balanceBatchAvg:
                 # sample equal number per class (up-sample rare classes, down-sample frequent)
                 avg_prop = {c: 1.0/len(classes) for c in classes}
@@ -1098,8 +1102,9 @@ class Normalization(Classification):
         else:
             target = np.mean(list(means.values()), axis=0)
         offsets = {b_id: (means[b_id] - target)*prop for b_id in means}
-        for enc in encoders.values():
-            enc.offsets[self] = offsets
+        for d, enc in encoders.items():
+            enc_batches = {b: offsets[b] for b in offsets if (d in Map and b in self.Y[d])}
+            enc.offsets[self] = enc_batches
 
 
 class Standardization(Normalization):
