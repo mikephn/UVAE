@@ -340,12 +340,12 @@ class Serial(Constraint):
         return emb
 
     # apply constraint, return both input and prediction
-    def embedMap(self, dataMap, mean=False):
+    def embedMap(self, dataMap, mean=False, **kwargs):
         ins = self.getInput(dataMap, mean)
         outs = {data: self.predict(ins[data], mean=mean) for data in ins}
         return ins, outs
 
-    def batchPrediction(self, dataMap, mean=True, bs=4096):
+    def batchPrediction(self, dataMap, mean=True, bs=4096, **kwargs):
         predicted = {}
         for data in dataMap:
             n_batches = int(np.ceil(len(dataMap[data]) / bs))
@@ -353,7 +353,7 @@ class Serial(Constraint):
             for n_b in range(n_batches):
                 b_inds = dataMap[data][int(n_b * bs):int((n_b + 1) * bs)]
                 dm = {data: b_inds}
-                _, outs = self.embedMap(dm, mean=mean)
+                _, outs = self.embedMap(dm, mean=mean, **kwargs)
                 p_cat.append(outs[data])
             if len(p_cat):
                 predicted[data] = np.concatenate(p_cat, axis=0)
@@ -644,7 +644,7 @@ class Encoder(Serial):
                 Xs[data] = tf.gather(Xs[data], self.channelMaps[data], axis=-1)
         return Xs
 
-    def embedMap(self, dataMap, mean=False):
+    def embedMap(self, dataMap, mean=False, **kwargs):
         ins = self.getInput(dataMap, mean)
         outs = {}
         for data in dataMap:
@@ -702,6 +702,7 @@ class Decoder(Serial):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.condFuncs = {}
+        self.autoencoder = None
 
     def build(self, in_dim, n_dense, relu_slope, dropout, depth, out_len, condFuncs=None):
         self.condFuncs = condFuncs
@@ -725,21 +726,68 @@ class Decoder(Serial):
         self.loss = keras.losses.MSE
         return z_inp, c_ins, out
 
-    def embedMap(self, dataMap, mean=False):
-        ins = self.getInput(dataMap, mean)
+    def embedMap(self, dataMap, mean=False, conditions:{Labeling:[str]}=None):
+        # In case of straight through reconstruction, without changing batch target:
+        if np.all([d in self.autoencoder.masks for d in dataMap]) and conditions is None:
+            _, Rec = self.autoencoder.embedMap(dataMap, mean=mean)
+            return None, Rec
+
+        # In case of cross-panel prediction, or manually setting batch target:
+        # When using normalisation or conditioning you should always specify a target batch,
+        # because the decoders aren't ever trained on unbiased encodings.
+        # This function selects a target batch by comparing specified list with available source batches:
+        def selectBatch(const, available):
+            if conditions is None or const not in conditions:
+                if available is None or len(available) == 0:
+                    # No target batches.
+                    return None
+                else:
+                    # Not specified but batches are available, use the first one.
+                    return available[0]
+            specified = conditions[const]
+            if type(specified) is str:
+                specified = [specified]
+            matching = [b for b in specified if b in available]
+            if len(matching) == 0:
+                # No match between specified and available batches.
+                return None
+            else:
+                # One or more matches, pick first batch from matches.
+                return matching[0]
+
+        ins = self.getInput(dataMap, mean) # get unbiased latent encoding of samples from source encoders
+        # If normalisation is present add target batch offsets:
+        if hasattr(self.autoencoder.encoder, 'offsets'):
+            bias = np.zeros(list(ins.values())[0].shape[1], dtype=float) # sum bias from multiple conditions
+            for norm in self.autoencoder.encoder.offsets:
+                useBatch = selectBatch(norm, list(self.autoencoder.encoder.offsets[norm].keys()))
+                #print(self.name, norm.name, useBatch)
+                if useBatch is not None:
+                    bias += self.autoencoder.encoder.offsets[norm][useBatch]
+            for data in ins:
+                ins[data] = ins[data] + np.tile(bias, (len(ins[data]), 1))
+
+        # If conditional decoders are used, set conditioning inputs:
         outs = {}
         for data in dataMap:
             dec_inp = [ins[data]]
             if len(self.condFuncs):
-                cs = [c.predictMap({data: dataMap[data]}, stacked=True, mean=True, called=False)
-                      for c in self.condFuncs]
+                cs = []
+                for c in self.condFuncs:
+                    useBatch = selectBatch(c, c.enum)
+                    #print(self.name, c.name, useBatch)
+                    oh = np.zeros(len(c.enum), dtype=int)
+                    if useBatch is not None:
+                        # using the specified decoding condition, else zeros will be used
+                        oh[int(list(c.enum).index(useBatch))] = 1
+                    cs.append(np.tile(oh, (len(dataMap[data]), 1)))
                 dec_inp.extend(cs)
             outs[data] = self.func(dec_inp)
         return ins, outs
 
 
 class Autoencoder(Serial):
-    def __init__(self, name, conditions:[Classification]=None, in_dim=None, latent_dim=None,
+    def __init__(self, name, conditions:[Classification]=None, condEncoder=True, in_dim=None, latent_dim=None,
                  variational=True, categorical=False, **kwargs):
         super().__init__(name=name, in_dim=in_dim, **kwargs)
         self.latent_dim = latent_dim
@@ -747,11 +795,13 @@ class Autoencoder(Serial):
         self.categorical = categorical
         self.conditions = conditions
         self.condFuncs = {}
+        self.condEncoder = condEncoder
         if self.variational:
             self.encoder = Unbiasing(name=self.name + '-encoder')
         else:
             self.encoder = Encoder(name=self.name + '-encoder')
         self.decoder = Decoder(name=self.name + '-decoder')
+        self.decoder.autoencoder = self
 
     def build(self):
         self.index()
@@ -776,7 +826,7 @@ class Autoencoder(Serial):
                                     out_len=self.latent_dim,
                                     variational=self.variational,
                                     categorical=self.categorical,
-                                    condFuncs=self.condFuncs)
+                                    condFuncs=self.condFuncs if self.condEncoder else {})
 
         z_inp, c_ins, out = self.decoder.build(in_dim=self.latent_dim,
                                  n_dense=hyper['width'],
@@ -799,6 +849,7 @@ class Autoencoder(Serial):
         d['latent_dim'] = self.latent_dim
         d['variational'] = self.variational
         d['categorical'] = self.categorical
+        d['condEncoder'] = self.condEncoder
         if self.conditions is not None:
             d['conditions'] = [cond.name for cond in self.conditions]
         d_enc = self.encoder.archive()
@@ -812,6 +863,7 @@ class Autoencoder(Serial):
         self.latent_dim = d['latent_dim']
         self.encoder.trained = self.trained
         self.categorical = d['categorical']
+        self.condEncoder = d['condEncoder']
 
     def loadParams(self):
         super().loadParams()
@@ -827,16 +879,32 @@ class Autoencoder(Serial):
         self.encoder.parent = value
         self.decoder.parent = value
 
-    def forwardAe(self, inds, mean=False):
+    def embedMap(self, dataMap, mean=False, **kwargs):
+        ins = self.encoder.getInput(dataMap, mean=mean)
+        outs = {}
+        for data in dataMap:
+            conds = []
+            if len(self.condFuncs):
+                cs = [c.predictMap({data: dataMap[data]}, stacked=True, mean=True, called=False)
+                      for c in self.condFuncs]
+                conds.extend(cs)
+            enc_inp = [ins[data]]
+            if self.condEncoder:
+                enc_inp += conds
+            Z = self.encoder.predict(enc_inp, mean=mean)
+            dec_inp = [Z] + conds
+            rec = self.decoder.predict(dec_inp, mean=mean)
+            outs[data] = rec
+        return ins, outs
+
+    def forward(self, inds, mean=False):
         Map = self.dataMap(inds)
-        Xs = self.encoder.getInput(Map, mean=mean)
-        Xcat = tf.concat([Xs[data] for data in Map], axis=0)
-        Zs, Recs = self.decoder.embedMap(Map, mean=mean)
-        Zcat = tf.concat([Zs[data] for data in Map], axis=0)
-        rec_cat = tf.concat([Recs[data] for data in Map], axis=0)
+        Xs, Recs = self.embedMap(Map, mean=mean)
+        X_cat = tf.concat([Xs[d] for d in Map], axis=0)
+        Rec_cat = tf.concat([Recs[d] for d in Map], axis=0)
         losses = {}
         weighed_loss = 0
-        rec_loss = tf.reduce_mean(self.decoder.loss(Xcat, rec_cat))
+        rec_loss = tf.reduce_mean(self.decoder.loss(X_cat, Rec_cat))
         weighed_loss += rec_loss * self.decoder.weight * self.weight
         losses[self.name] = rec_loss
         # regularization losses can only be accessed after forward pass
@@ -850,13 +918,6 @@ class Autoencoder(Serial):
     def forward(self, inds):
         losses, weighed_loss, _ = self.forwardAe(inds)
         return losses, weighed_loss
-
-    def predictMap(self, dataMap, mean=True, stacked=False, bs=4096, **kwargs):
-        emb = self.encoder.predictMap(dataMap, mean=mean, stacked=False, bs=bs, **kwargs)
-        if stacked:
-            return self.stack(emb)
-        else:
-            return emb
 
 
 class Subspace(Autoencoder):
@@ -901,13 +962,15 @@ class Subspace(Autoencoder):
             col_inds = np.array([data.channels.index(c) for c in self.channels], dtype=int)
             self.channelMaps[data] = col_inds
 
-    def forward(self, inds):
-        losses, weighed_loss, Zsub_cat = self.forwardAe(inds, mean=True)
+    def forward(self, inds, mean=False):
+        losses, weighed_loss = super().forward(inds, mean=mean)
         if len(self.embedding) and self.trainEmbedding:
             Map = self.dataMap(inds)
-            Zs = self.getInput(Map, mean=True)
-            Z_cat = tf.concat([Zs[data] for data in Map], axis=0)
-            merge_loss = tf.reduce_mean(self.loss(Zsub_cat, Z_cat))
+            _, Z_self = self.encoder.embedMap(Map, mean=True)
+            Z_cat_self = tf.concat([Z_self[data] for data in Map], axis=0)
+            Zs_other = self.getInput(Map, mean=True)
+            Z_cat_other = tf.concat([Zs_other[data] for data in Map], axis=0)
+            merge_loss = tf.reduce_mean(self.loss(Z_cat_self, Z_cat_other))
             losses[self.name + '-merge'] = merge_loss * self.pull
             weighed_loss += merge_loss * self.weight
         return losses, weighed_loss
