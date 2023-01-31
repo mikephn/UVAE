@@ -1,20 +1,28 @@
 ## Introduction
 
-UVAE is a deep learning framework for training autoencoder-based latent variable models through simple description of prediction objectives.
+UVAE is a deep learning framework for training autoencoder-based latent variable models through simple description of objectives.
 
-The purpose is to create models which can automatically integrate disjoint data modalities, correct batch effects, and perform regression, classification, imputation, and clustering over the joint latent space.
+You can create models to automatically integrate disjoint data modalities, correct batch effects, perform regression, classification, and imputation over the joint latent space.
 
 Currently column data is supported.
 
 #### Dependencies
 
-`tensorflow==2.5.0` 
+`tensorflow==3.1.0` 
 
-Optional:
+Optional (Python):
 
 `arm-mango` for hyper-parameter tuning,
 
+`harmonypy` for LISI metric calculation,
+
 `matplotlib umap-learn` for visualisation.
+
+Optional (R):
+
+`immunogenomics/lisi` for LISI metric calculation (if harmonypy is not used),
+
+`cyCombine` for EMD/MAD metric calculation.
 
 ## Usage
 
@@ -133,17 +141,17 @@ p_ids = {p0: np.repeat('0', len(p0.X)),
             p1: np.repeat('1', len(p1.X)),
             p2: np.repeat('2', len(p2.X))}
 
-mmd = uv + MMD(Y=p_ids, name='MMD', pull=10)
+mmd = uv + MMD(Y=p_ids, name='MMD', pull=1)
 ```
 ![Training of 3 modalities with MMD.](imgs/3.gif)
 
 ![UMAP of latent space joined by MMD.](imgs/3.png)
 
-The results look more aligned, and we can further increase overlap by increasing *pull*. However, remember that MMD forces latent densities to match. We know that our panels contain different proportions of cell-types, and therefore shouldn't match exactly. UVAE can address this problem by performing automatic control set balancing.
+The results are more aligned, and we can further increase overlap by increasing *pull*. However, remember that MMD forces latent densities to match. We know that our panels contain different proportions of cell-types, and therefore shouldn't match exactly. UVAE can address this problem by performing automatic control set balancing.
 
 ### <a name="norm"></a> Normalise and resample control sets
 
-UVAE is designed to perform running normalisation of constraints based on dynamically sampled control sets. Typically, we want our controls to represent comparable samples of data from each batch or modality. For instance, we may want to standardise (scale to *mean=0* and *sd=1*) our input data to make it comparable across batches. However, because our batches contain imbalanced proportions of cell types, the mean and variance statistics will not be directly comparable. We need to sample a similar control set from each batch before calculating the statistics.
+UVAE is designed to perform running normalisation of constraints based on dynamically sampled control sets. Typically, we want our controls to represent comparable samples of data from each batch or modality. For instance, we may want to normalise (move to a common mean) our batch data in latent space. However, because our batches contain imbalanced proportions of cell types, the mean statistic will not be directly comparable. We need to sample a similar control set from each batch before calculating the statistic.
 
 The ground-truth batch assignment won't change throughout, so we can store it as *Labeling*. Unlike *Classification* this will not train a predictor, but simply return the ground truth labels when necessary:
 
@@ -151,36 +159,32 @@ The ground-truth batch assignment won't change throughout, so we can store it as
 batch = uv + Labeling(Y={p0: B0, p1: B1, p2: B2}, name='Batch')
 ``` 
 
-*Standardization* implements Z-normalisation of samples in the *input space*:
+*Normalization* implements latent space arithmetics that mean-centers the embeddings of batches in the latent space, optionally to a specified target:
 
 ```python
-sd = uv + Standardization(Y=batch.Y, name='Input Z-norm', interval=1)
+ln = uv + Normalization(Y=batch.Y, name='Latent norm', target='p0b0')
 ```
-
-*Interval* parameter defines number of epochs between re-calculating the statistics. However, because our batches are fixed, this normalisation is static at the moment.
 
 We can use any *Classification* or *Labeling* to **resample** any other constraint. If the target of rebalancing is an *Autoencoder* or *Regression* (including their subclasses: *Classification*, *Projection*, *Subspace* etc.) it results in taking equal number of samples from each source class during training. If the target is a *Normalization* subclass (including *Standardization* or *MMD*), the resampling is performed **per batch**. For instance, specifying:
 
 ```python
 ctype = uv['Cell type'] # our cell-type classifier added before
-ctype.resample(sd)
+ctype.resample(ln)
 ```
 
-will result in the cell-type classifier predicting the classes of all the samples affected by *Standardization* at the end of every epoch, and balancing them to have the same number of cells from each class in each batch.
-
-*Normalization* implements latent space arithmetics that mean-centers the embeddings of batches in the *latent space*:
+will result in the cell-type classifier predicting the classes of all the samples affected by *Normalization* at the end of every epoch, and balancing them to have the same number of cells from each class in each batch.
 
 ```python
 ln = uv + Normalization(Y=batch.Y, name='Latent norm', target='p0b0', balanceBatchAvg=True)
-ctype.resample(sd)
+ctype.resample(ln)
 ```
 
 The two lines above will, at the end of each epoch, predict the classes of the data (included in batch.Y), define a control set for each batch that includes the same proportion of classes across batches, calculate latent offsets for each batch to the center of *p0b0* (which is set as the normalisation target), and consequently subtract these offsets from all latent embeddings in a given batch. Specifying *target* is optional, if none is specified then batches are offset to a common center point. *balanceBatchAvg* makes resampling first determine the proportions of classes across all batches, then resample to a mean proportion. If *false*, each class is sampled equally (not preserving global proportions).
 
 More than one resampling can be added to each target, in which case the underlying data will be divided into equal parts for each source. Additionally, the resampling and normalisation constraints can be *eased in*, so that classifiers have time to train. This is determined by *ease* parameter in UVAE_hyper.py.
-### Conditional generation
+### Conditional autoencoding
 
-Frequently we are facing a problem: we would like to have a joined latent space with batch effects removed, but we don't know what unbiased data samples look like. For example, let's create an autoencoder for a single modality, which consists of 3 batches. We want to apply MMD to merge the batches in the latent space and remove batch effects:
+Let's create an autoencoder for a single modality, which consists of 3 batches. We want to apply MMD to merge the batches in the latent space and remove batch effects:
 
 ```python
 uv = UVAE('mmd.uv')
@@ -190,30 +194,25 @@ mmd = uv + MMD(Y={p0: B0}, name='MMD_batch')
 
 For training, UVAE will automatically add an autoencoder for the *Data* object and train to minimise a combination of reconstruction error and MMD. This however poses contradictory objectives: we want the latent distributions of batches to be indistinguishable, but at the same time we want the reconstruction of each batch to be faithful (and therefore contain batch-specific effects).
 
-We can address this problem in one of two ways. We could add separate autoencoders for each batch, so that each decoder can implicitly capture its own batch effects. This approach splits the training data, and is unsuitable for too many batches. We could also condition the decoder to provide it with batch identifying information, so that it doesn't need to be redundantly captured in the latent space.
+We can address this problem by conditioning the autoencoder to provide it with batch identifying information, so that it doesn't need to be redundantly captured in the latent space.
 
-To add conditioning to the decoder we need to manually instantiate the autoencoder:
+To add conditioning we need to manually instantiate the autoencoder and specify one or more conditions:
 
 ```python
 uv = UVAE('mmd.uv')
 p0 = uv + Data(X0, name='Panel')
 batch = uv + Labeling(Y={p0: B0}, name='Batches')
-ae0 = uv + Autoencoder(name=p0.name, masks=p0, conditions=[batch])
+ae0 = uv + Autoencoder(name=p0.name, masks=p0, conditions=[batch], condEncoder=True)
 mmd = uv + MMD(Y={p0: B0}, name='MMD_batch')
 ```
 
-Any autoencoder can be made conditional in this way. Also, more than one conditioning can be specified simultaneously, each containing multiple classes. *Note*: most CVAE implementations add conditioning to both encoder, and decoder. UVAE conditions the decoder only.
+Any autoencoder can be made conditional in this way. More than one conditioning can be specified simultaneously, each containing multiple classes. By default, both encoder and decoder are conditioned.
 
-To change the target batch for generation edit the *Labeling* constraint provided as conditioning before calling any reconstruction method. For example, to generate everything in the style of the first batch, set it as target for all the samples:
-
-```python
-target = batch.enum[0]
-batch.targets = {p0: np.repeat(target, len(p0.X))}
-```
+### Conditional generation
 
 The **reconstruct()** function has two modes of operation. If no *channels* are specified, each sample from the requested map is generated from the corresponding autoencoder. If *channels* are specified, each sample is first encoded by its panel encoder, then generated from all the decoders which support requested channels, and averaged. This allows for cross-modal generation and imputation of missing markers.
 
-E.g. to impute all available markers for all samples:
+E.g. to impute all available markers for all samples using all available panel decoders:
 
 ```python
 # map covering all data
@@ -224,9 +223,22 @@ all_markers = np.unique(np.concatenate([d.channels for d in all_samples]))
 rec_imputed = uv.reconstruct(all_samples, channels=all_markers)
 ```
 
+A subset of panels which we want to use to decode can be explicitly specified:
+
+```python
+rec_imputed = uv.reconstruct(all_samples, channels=all_markers, decoderPanels=[p0, p1])
+```
+
+Specific target conditions can be used to generate data for each conditional autoencoder, or normalisation constraint:
+
+```python
+targets = {ln: 'p0b0', batch: 'p0b0'}
+rec_imputed = uv.reconstruct(all_samples, channels=all_markers, targets=targets)
+```
+
 ### Hyper-parameter tuning
 
-Hyper-parameters such as model size, learning rates (separate for *unsupervised*, *supervised*, and *merge* losses), mutual frequency of training of each constraint, as well as *pull* strength can be automatically determined using *mango* Bayesian optimiser. The ranges and default values can be adjusted in *UVAE_hyper.py*. Each constraint has a *weight* parameter, which can be used to adjust its importance for model selection only. Optimisation is done by calling the instantiated UVAE object (after adding all required data and constraints):
+Hyper-parameters such as model size, learning rates (separate for *unsupervised*, *supervised*, and *merge* losses), mutual frequency of training of each constraint, as well as *pull* strength can be automatically determined using *mango* Bayesian optimiser. The ranges and default values can be adjusted in *UVAE_hyper.py*. Each constraint has a *weight* parameter, which can be used to adjust its importance for model selection only. Optimisation is done by calling *optimize* on the instantiated UVAE object after adding all required data and constraints:
 
 ```python
 uv.optimize(iterations=20, # training attempts
@@ -235,12 +247,39 @@ uv.optimize(iterations=20, # training attempts
             samplesPerEpoch=100000, # data samples per epoch
             valSamplesPerEpoch=100000, # validation samples per epoch
             sizeSeparately=True, # optimise width and depth of each constraint separately
-            overwriteIfBest=True) # save the best model from the search
+            subset=['latent_dim', 'width', 'pull-MMD_batch'], # a subset of hyper-parameters to be optimised
+            callback=None) # callback function called with the resulting model after each optimisation attempt
+```
+
+*Subset* is a list of hyper-parameter names. To include *pull* or *frequency* of individual constraints, use *pull-name* or *frequency-name* with the constraint name.
+
+LISI metric can be included in the hyper-parameter optimisation loss. First, create an object storing information for LISI calculation:
+
+```python
+lisiSet = LisiValidationSet(dm=uv.allDataMap(), # data range to calculate LISI over
+                            labelConstraint=ctype, # Labeling or Classification defining classes (which should remain separated)
+                            batchConstraint=batch, # Labeling or Classification defining batches (which should be merged)
+                            normClasses=True, # should equal number of class instances be sampled from each batch
+                            labelRange=(1.0, 10.0), # expected range of score for class labeling (defaults to min:1.0, max:number of classes)
+                            labelWeight=1.0, # label score contribution
+                            batchRange=(1.0, 10.0), # expected range of score for batch labeling (defaults to min:1.0, max:number of batches)
+                            batchWeight=1.0, # batch score contribution
+                            perplexity=100) # LISI perplexity parameter
+```
+
+Any other metric can be added as a hyper-parameter optimisation loss by specifying a function which is called after each optimisation run. This function should accept the newly trained model as input, and return the loss contribution (lower is better):
+
+```python
+def customHyperoptLoss(model):
+    score = ...
+    return -score
+
+uv.optimize(50, customLoss=customHyperoptLoss)
 ```
 
 ## Summary
 
-To summarise, let's create a model that merges the 9 batches from 3 panels, applying batch conditioning to the decoders, while using the extrapolated class information to balance the MMD:
+To summarise, let's create a model which merges the panels using shared channels and MMD, while performing batch effect correction with conditional autoencoding and latent space normalisation. The classifier will be used to predict cell-types across the dataset and balance the sensitive merging and normalisation constraints:
 
 ```python
 from src.UVAE import *
@@ -257,9 +296,14 @@ ae0 = uv + Autoencoder(name=p0.name, masks=p0, conditions=[batch])
 ae1 = uv + Autoencoder(name=p1.name, masks=p1, conditions=[batch])
 ae2 = uv + Autoencoder(name=p2.name, masks=p2, conditions=[batch])
 
-mmd = uv + MMD(Y=batch.Y, name='MMD', pull=10)
+ln = uv + Normalization(Y=batch.Y, name='Latent norm')
+
+sub = uv + Subspace(masks=[p0, p1, p2], name='Shared markers', conditions=[batch], pull=1)
+mmd = uv + MMD(Y=batch.Y, name='MMD', pull=1)
 
 ctype = uv + Classification(Y={p0: Y0, p1: Y1, p2: Y2}, nullLabel='unk', name='Cell type')
+
+ctype.resample(ln)
 ctype.resample(mmd)
 
 red2d = uv + Projection(latent_dim=2, name='2D')
