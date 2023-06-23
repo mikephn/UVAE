@@ -19,7 +19,8 @@ hyperDefault = {'latent_dim': 50,
                 'grad_clip': 0.1,
                 'ease_epochs': 1,
                 'frequency': 1.0,
-                'batch_size': 512
+                'batch_size': 512,
+                'beta': 1.0,
                 }
 
 hyperRanges = {'latent_dim': randint(20, 101),
@@ -37,7 +38,8 @@ hyperRanges = {'latent_dim': randint(20, 101),
                'grad_clip': uniform(0.0001, 1.0),
                'ease_epochs': randint(1, 10),
                'frequency': uniform(0.1, 3.0),
-               'batch_size': randint(128, 1025)
+               'batch_size': randint(128, 1025),
+               'beta': uniform(0.0, 1.0)
                }
 
 def lisiScoring(model, lisiValidationSet, loss, archDict, lossMsg):

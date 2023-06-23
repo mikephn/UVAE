@@ -808,6 +808,7 @@ class Autoencoder(Serial):
         hyper = self.hyperparams()
         if self.latent_dim is None:
             self.latent_dim = hyper['latent_dim']
+        self.beta = hyper['beta']
         if self.conditions is not None:
             for c in self.conditions:
                 c_len = c.outputDim()
@@ -911,7 +912,7 @@ class Autoencoder(Serial):
         losses[self.name] = rec_loss
         # regularization losses can only be accessed after forward pass
         if len(self.encoder.func.losses):
-            kl_loss = losses[self.name + '-kl'] = self.encoder.func.losses[0]
+            kl_loss = losses[self.name + '-kl'] = self.encoder.func.losses[0] * self.beta
             weighed_loss += kl_loss * self.encoder.weight * self.weight
             losses[self.name + '-rec'] = rec_loss
             losses[self.name] += kl_loss
