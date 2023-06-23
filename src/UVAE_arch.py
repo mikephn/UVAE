@@ -35,6 +35,8 @@ class GaussianEncoder(keras.layers.Layer):
     def __init__(self, input_len, latent_len, encoder, **kwargs):
         super(GaussianEncoder, self).__init__(**kwargs)
         self.encoder = encoder
+        self.input_len = input_len
+        self.latent_len = latent_len
         self.z_mean = Conv1D(filters=int(latent_len), kernel_size=int(input_len), padding='valid')
         self.z_log_var = Conv1D(filters=int(latent_len), kernel_size=int(input_len), padding='valid')
         self.sampling = Sampling()
@@ -49,3 +51,11 @@ class GaussianEncoder(keras.layers.Layer):
         self.add_loss(kl_loss)
         z = self.sampling([z_mean, z_log_var])
         return z_mean, z_log_var, z
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "input_len": self.input_len,
+            "latent_len": self.latent_len,
+        })
+        return config
