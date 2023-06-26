@@ -8,7 +8,7 @@ Currently column data is supported.
 
 #### Dependencies
 
-`tensorflow==3.1.0` 
+`tensorflow==2.10.1` 
 
 Optional (Python):
 
@@ -16,7 +16,10 @@ Optional (Python):
 
 `harmonypy` for LISI metric calculation,
 
+`sklearn` (Gaussian Mixture) or `scanpy` (Leiden) for clustering,
+
 `matplotlib umap-learn` for visualisation.
+
 
 Optional (R):
 
