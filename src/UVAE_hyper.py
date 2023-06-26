@@ -1,5 +1,5 @@
 import sys, os, time, pickle, copy
-from collections.abc import Callable
+from typing import Callable
 from scipy.stats import randint, uniform
 from src.UVAE_classes import *
 from src.UVAE_diag import calculateLISI, classNormalizationMask
