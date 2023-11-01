@@ -1062,8 +1062,18 @@ class Normalization(Labeling):
                 b_inds_res = []
                 # maintain the same total number of samples in each batch
                 b_n_samples = len(b_inds)
+                # find which classes are present in the resampled group
+                set_b_vals = set(b_vals)
+                present_props = {}
+                for c in avg_prop:
+                    if c in set_b_vals:
+                        present_props[c] = avg_prop[c]
+                sum_props_present = np.sum(list(present_props.values()))
+                if sum_props_present > 0:
+                    for c in present_props:
+                        present_props[c] = present_props[c] / sum_props_present
                 # sample defined proportions
-                for c, c_prop in avg_prop.items():
+                for c, c_prop in present_props.items():
                     bc_inds = b_inds[b_vals == c]
                     if len(bc_inds):
                         to_sample = int(np.round(b_n_samples * c_prop * prop / n_resamplings))
