@@ -4,6 +4,33 @@ from tensorflow.keras.layers import *
 
 
 class MLP(keras.layers.Layer):
+    """
+    A Multi-Layer Perceptron layer.
+
+    This layer is a feedforward neural network composed of multiple dense
+    layers, optionally followed by leaky ReLU activations and dropout layers.
+    An additional dense layer can be added at the end to produce an output
+    of a specified length.
+
+    Attributes
+    ----------
+    layers : list
+        List of keras layers used in the MLP.
+
+    Parameters
+    ----------
+    n_dense : int, optional
+        Number of neurons in the dense layers.
+    relu_slope : float, optional
+        The slope of the leaky ReLU activation.
+    dropout : float, optional
+        Fraction of the input units to drop.
+    depth : int, optional
+        Number of dense layers with leaky ReLU activation to add.
+    out_len : int, optional
+        Length of the output layer. If specified, an additional dense layer
+        is added at the end of the MLP with linear activation.
+    """
     def __init__(self, n_dense=128, relu_slope=0.2, dropout=0.2, depth=1, out_len=None, **kwargs):
         super(MLP, self).__init__(**kwargs)
         self.layers = []
@@ -23,6 +50,17 @@ class MLP(keras.layers.Layer):
 
 
 class Sampling(keras.layers.Layer):
+    """
+    A sampling layer for Variational Autoencoders.
+
+    This layer samples from a Gaussian distribution using the provided
+    means and log-variances.
+
+    Returns
+    -------
+    tensor
+        Sampled tensor values.
+    """
     def call(self, inputs):
         z_mean, z_log_var = inputs
         batch = tf.shape(z_mean)[0]
@@ -32,6 +70,39 @@ class Sampling(keras.layers.Layer):
 
 
 class GaussianEncoder(keras.layers.Layer):
+    """
+    A Gaussian encoder layer for Variational Autoencoders.
+
+    This layer encodes inputs into a Gaussian distribution in the latent
+    space. It consists of an encoder followed by convolutional layers to
+    produce the mean and log-variance of the latent variables. The
+    reparameterization trick is used to sample from this distribution.
+
+    Attributes
+    ----------
+    encoder : keras.layers.Layer
+        Encoder layer used before producing the Gaussian parameters.
+    z_mean : keras.layers.Conv1D
+        Convolutional layer to produce the means of the latent variables.
+    z_log_var : keras.layers.Conv1D
+        Convolutional layer to produce the log-variances of the latent variables.
+    sampling : Sampling
+        Sampling layer to sample from the Gaussian distribution.
+
+    Parameters
+    ----------
+    input_len : int
+        Length of the input to the encoder.
+    latent_len : int
+        Length of the latent space.
+    encoder : keras.layers.Layer
+        Encoder layer to be used in the Gaussian encoder.
+
+    Returns
+    -------
+    tuple
+        Mean, log-variance, and sampled value from the latent distribution.
+    """
     def __init__(self, input_len, latent_len, encoder, **kwargs):
         super(GaussianEncoder, self).__init__(**kwargs)
         self.encoder = encoder

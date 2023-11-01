@@ -1,7 +1,47 @@
 from src.UVAE_hyper import *
 
+
 class UVAE:
-    def __init__(self, path):
+    """
+    A Variational Autoencoder with a shared latent space.
+
+    The UVAE class provides functionality to integrate disjoint data modalities, correct
+    batch effects, perform regression, classification, and imputation over
+    the joint latent space. Data, labelling, and other constraints can be added
+    to an instance of this class. The state of the UVAE object is automatically saved
+    during training, and can be loaded automatically by specifying a file path upon initialization.
+
+    Attributes
+    ----------
+    data : list
+        List of added Data instances, in the order they were added.
+    autoencoders : dict
+        Dictionary of Autoencoder instances corresponding to each Data object.
+    constraints : dict
+        Dictionary containing non-autoencoder constraints. The keys are the names of the constraints.
+    resamplings : dict
+        Dictionary mapping resampling sources (of type Classification or Labeling) to sets of targets.
+    hyper : dict
+        Dictionary of shared hyper-parameters of the model.
+    optimizers : dict
+        Dictionary of Keras optimizers used for training.
+    history : History, optional
+        An instance of the History class used for early stopping and storing training losses.
+    msHistory : ModelSelectionHistory
+        An instance storing scores of hyper-parameter optimization using the mango library.
+    archives : dict
+        Dictionary of archived parameters for all model constraints.
+    path : str
+        File path for archiving and unarchiving the UVAE model.
+    built : bool
+        Indicator of whether the model constraints were instantiated and parameters were loaded.
+    variational : bool
+        If True, the model uses variational auto-encoders.
+    shouldCache : bool
+        If True, predictions and latent embeddings from constraints are cached. They are regenerated only if
+        the hierarchy of the corresponding constraint changes. If False, new predictions are always made.
+    """
+    def __init__(self, path: str):
         self.data = []
         self.autoencoders = {}
         self.constraints = {}
@@ -21,7 +61,39 @@ class UVAE:
         if os.path.exists(path):
             self.unarchive()
 
+
     def train(self, maxEpochs=30, batchSize=None, samplesPerEpoch=0, valSamplesPerEpoch=0, earlyStopEpochs=0, callback=None, saveBest=False, resetOpt=True, skipTrained=True, verbose=True):
+        """
+        Train the UVAE model.
+
+        Parameters
+        ----------
+        maxEpochs : int, optional
+            Maximum number of epochs for training, by default 30.
+        batchSize : int, optional
+            Size of the training batch, if None the value from hyper-parameter dictionary is used.
+        samplesPerEpoch : int, optional
+            Number of samples per epoch, setting of 0 will pass through all added samples as one epoch.
+        valSamplesPerEpoch : int, optional
+            Number of validation samples per epoch, setting of 0 uses all validation data.
+        earlyStopEpochs : int, optional
+            Number of epochs without improvement for triggering early stopping, 0 disables early stopping.
+        callback : function, optional
+            Function to be called after each epoch of training.
+        saveBest : bool, optional
+            Whether to save the model during training after every improvement of loss, by default False.
+        resetOpt : bool, optional
+            Whether to reset the optimizers state before training, by default True.
+        skipTrained : bool, optional
+            Whether to skip training of the already trained constraints (freeze them), by default True.
+        verbose : bool, optional
+            Whether to print training logs, by default True.
+
+        Returns
+        -------
+        History
+            History object containing loss values during training.
+        """
         self.build(overwrite=not skipTrained)
         if batchSize is not None:
             self.hyper['batch_size'] = int(batchSize)
@@ -81,10 +153,44 @@ class UVAE:
         self.archive()
         return self.history
 
+
     def optimize(self, iterations=20, maxEpochs=30, earlyStopEpochs=0,
                  samplesPerEpoch=100000, valSamplesPerEpoch=100000,
                  subset=None, sizeSeparately=False, lossWeight=1.0,
                  lisiValidationSet=None, customLoss=None, callback=None):
+        """
+        Optimize the UVAE model's hyper-parameters.
+        Only new constraints which were not already trained are optimised (their .trained property is False).
+
+        Parameters
+        ----------
+        iterations : int, optional
+            Number of training attempts, by default 20.
+        maxEpochs : int, optional
+            Maximum number of epochs for training during each optimization run, by default 30.
+        earlyStopEpochs : int, optional
+            Number of epochs for early stopping, by default 0 (no early stopping).
+        samplesPerEpoch : int, optional
+            Number of data samples considered per epoch, by default 100000. Set 0 to pass through all the data in each epoch.
+        valSamplesPerEpoch : int, optional
+            Number of validation samples considered per epoch, by default 100000. This subset is fixed throughout training. Set 0 to use all validation data once.
+        subset : list, optional
+            List of hyper-parameter names to be optimized. To include pull or frequency of individual constraints, use pull-name or frequency-name with the constraint name. By default None.
+        sizeSeparately : bool, optional
+            If True, optimizes width and depth of each constraint separately, by default False.
+        lossWeight : float, optional
+            Adjusts the importance of the training loss for model selection (compared to LISI losses or optional custom loss), by default 1.0.
+        lisiValidationSet : LisiValidationSet, optional
+            Object storing information for LISI calculation, by default None.
+        customLoss : function, optional
+            Custom function to compute a loss contribution after each optimization run, by default None.
+        callback : function, optional
+            Function to call after each optimization run, by default None.
+
+        Returns
+        -------
+        None
+        """
         left = self.msHistory.addIterations(iterations)
         if left > 0:
             optimizeHyperparameters(self.msHistory, iterations=left, maxEpochs=maxEpochs, earlyStopEpochs=earlyStopEpochs,
@@ -92,7 +198,23 @@ class UVAE:
                                     subset=subset, sizeSeparately=sizeSeparately, lossWeight=lossWeight,
                                     lisiValidationSet=lisiValidationSet, customLoss=customLoss, callback=callback)
 
+
     def archive(self, path=None):
+        """
+        Archive the UVAE model's current state, including hyperparameters, autoencoders, constraints, and resamplings.
+
+        This method saves the current state of the UVAE model into a pickle file, which can be used later for restoration
+        or analysis. If the model has not been built, it triggers the build process before archiving.
+
+        Parameters
+        ----------
+        path : str, optional
+            The path to save the pickle archive. If not provided, uses the default path set during the model's initialization.
+
+        Returns
+        -------
+        None
+        """
         if not self.built:
             self.build()
         if path is None:
@@ -111,7 +233,19 @@ class UVAE:
             a['resamplings'][c.name] = [t.name for t in targets]
         pickle.dump(a, open(path, "wb"))
 
+
     def unarchive(self):
+        """
+        Restore the UVAE model's state from a previously saved archive.
+
+        This method loads the UVAE model's state from a pickle file saved on the default path set during the
+        model's initialization. It restores hyperparameters, autoencoders, constraints, resamplings, and other
+        related attributes to their saved states.
+
+        Returns
+        -------
+        None
+        """
         d = pickle.load(open(self.path, "rb"))
         self.archives = d
         self.hyper = d['hyper']
@@ -150,17 +284,58 @@ class UVAE:
                 if 'conditions' in c.saved:
                     c.conditions = [self[c_name] for c_name in c.saved['conditions']]
 
+
     def loadParams(self):
+        """
+        Loads the saved parameters of each of model constraints.
+
+        Returns
+        -------
+        None
+        """
         for c in self.allConstraints():
             if c.trained:
                 c.loadParams()
 
+
     def hyperparams(self):
+        """
+        Retrieve the hyperparameters of the UVAE model.
+
+        This method returns a dictionary of hyperparameters for the UVAE model. If any custom hyperparameters
+        have been set, they will override the default values in the returned dictionary.
+
+        Returns
+        -------
+        dict
+            Dictionary containing the hyperparameters of the UVAE model.
+        """
         hyper = dict(hyperDefault)
         hyper.update(self.hyper)
         return hyper
 
+
     def build(self, hyper=None, overwrite=False, reload=False):
+        """
+        Build or rebuild the UVAE model's structure based on the data and constraints provided.
+
+        This method sets up the architecture of the UVAE model, including autoencoders, constraints, and other related
+        components. If the model has already been built, this method can be used to update or reload its components based
+        on the parameters provided.
+
+        Parameters
+        ----------
+        hyper : dict, optional
+            Dictionary containing custom hyperparameters to update the model's default hyperparameters.
+        overwrite : bool, optional
+            If True, it will reset the parameters of autoencoders and constraints to new random values, by default False (keep existing parameters).
+        reload : bool, optional
+            If True, reloads the structure of the model to apply new hyper-parameters, by default False.
+
+        Returns
+        -------
+        None
+        """
         if hyper is not None:
             self.hyper.update(hyper)
         hyper = self.hyperparams()
@@ -213,7 +388,33 @@ class UVAE:
         self.built = True
         self.hyper = hyper
 
+
     def propagate(self, validation=False, batchSize=128, sampleLimit=0, skipTrained=True):
+        """
+        Forward and backward propagation through the UVAE model based on given parameters and data.
+
+        This method manages the forward and backward passes for the UVAE model, adjusting weights based on loss and
+        training the specified constraints. It calculates the loss for different constraints and updates the model's
+        parameters accordingly. Additionally, it can operate in validation mode to evaluate the model's performance
+        on validation data.
+
+        Parameters
+        ----------
+        validation : bool, optional
+            If True, performs forward propagation on validation data without backpropagation, by default False.
+        batchSize : int, optional
+            Number of samples in each batch for training or validation, by default 128.
+        sampleLimit : int, optional
+            Maximum number of samples to be used during propagation, by default 0 (no limit).
+        skipTrained : bool, optional
+            If True, skips training of constraints that are already trained, by default True.
+
+        Returns
+        -------
+        History
+            Object containing the history of losses accumulated during training.
+
+        """
         # get constraints trainable by backprop
         constraints = self.allConstraints()
         constraints = [c for c in constraints if c._inds is not None and type(c) not in [Standardization, Normalization, Labeling]]
@@ -332,7 +533,33 @@ class UVAE:
 
         return self.history
 
+
     def resample(self, resample_prop=1.0, skipTrained=True):
+        """
+        Resample the constraints in the UVAE model based on predicted targets.
+
+        Given the current model's predictions, this method adjusts the sampling of the data points
+        to achieve a balanced representation. It's particularly useful in cases where the distribution
+        of classes in the data is imbalanced, or when it's crucial to have a specific representation
+        of samples for particular constraints.
+
+        This internal method is called after each epoch od training.
+
+        Parameters
+        ----------
+        resample_prop : float, optional
+            Proportion of data points to be resampled, adjusted based on the ease_epochs hyper-parameter.
+        skipTrained : bool, optional
+            If True, skips resampling of constraints that are already trained, by default True.
+
+        Notes
+        -----
+        The method works by predicting merged targets for each classifier and adjusting the sampling
+        of the data points based on these predictions.
+
+        This method is meant to be called internally during training. To add a new resampling source-target pair,
+        call source.resample(target) on the individual constraints themselves.
+        """
         if len(self.resamplings):
             # predict merged targets for each classifier
             targetMaps = {}
@@ -374,7 +601,29 @@ class UVAE:
             for target in targetResults:
                 target.balance(targetResults[target], prop=resample_prop)
 
+
     def updateOffsets(self, correction_prop=1.0, skipTrained=True):
+        """
+        Update the offsets for normalization and standardization constraints in the UVAE model.
+
+        This method recalculates and updates the biases or statistics necessary for normalization
+        and standardization constraints in the model. This ensures that the latent representation
+        remains centered and scaled appropriately across different batches or modalities.
+
+        Parameters
+        ----------
+        correction_prop : float, optional
+            Proportion of the offsets to be applied, adjusted based on the ease_epochs hyper-parameter.
+        skipTrained : bool, optional
+            If True, skips updating constraints that are already trained, by default True.
+
+        Notes
+        -----
+        The method works by iterating over all normalization and standardization constraints in the model.
+        For each constraint, it checks if it's time to update (based on the defined intervals) and
+        recalculates the necessary biases or statistics. The updated values are then used in the subsequent
+        training or inference.
+        """
         norm_cs = self.constraintsType(Normalization) + self.constraintsType(Standardization)
         for c in norm_cs:
             if not c.trained or not skipTrained:
@@ -397,7 +646,39 @@ class UVAE:
                         c.calculateStats()
                         c.standardizeData()
 
+
     def predictMap(self, dataMap, mean=False, stacked=False, bs=4096):
+        """
+        Predict the latent embeddings for the given data map using the model's autoencoders.
+
+        This method returns the latent embeddings for the provided data samples by forwarding them
+        through the corresponding autoencoders' encoders.
+
+        Parameters
+        ----------
+        dataMap : DataMap or dict
+            Dictionary mapping data objects to sample indices. The data objects are keys, and
+            the associated value is an array of indices specifying which samples to predict embeddings for.
+        mean : bool, optional
+            If True, use the mean of the latent distribution as the embedding, otherwise
+            use a sampled value from the distribution, by default False.
+        stacked : bool, optional
+            If True, concatenate all embeddings into a single numpy array, by default False.
+        bs : int, optional
+            Batch size to use when predicting embeddings, by default 4096.
+
+        Returns
+        -------
+        dict or np.ndarray
+            If `stacked` is False, returns a dictionary mapping data objects to their corresponding
+            embeddings. If `stacked` is True, returns a single concatenated numpy array of embeddings.
+
+        Notes
+        -----
+        The method uses the encoder part of the autoencoder to generate the latent embeddings.
+        Depending on the `mean` parameter, it either uses the mean of the latent distribution or
+        samples from it.
+        """
         if not self.built:
             self.build()
         emb = {}
@@ -407,49 +688,38 @@ class UVAE:
             emb = np.array(np.concatenate(list(emb.values())))
         return emb
 
-    def mergedPredictMap(self, dataMap, embeddings:list=None, uniform=True, prop=0.5, stacked=False):
-        embs_own = self.predictMap(dataMap, mean=True)
-        if embeddings is None or len(embeddings) == 0:
-            return embs_own
-        embs = {dt: [[samp] for samp in embs_own[dt]] for dt in embs_own}
-        for e in embeddings:
-            e_map = {dt: np.arange(len(e.masks[dt]))[e.masks[dt]] for dt in e.masks}
-            for dt in e_map:
-                common, ind_own, _ = np.intersect1d(dataMap[dt], e_map[dt], return_indices=True)
-                emb = e.predictMap({dt: common}, mean=True)[dt]
-                for ii, i in enumerate(ind_own):
-                    embs[dt][i].append(emb[ii])
-        for dt in embs:
-            if not uniform:
-                if len(embs[dt][0]) == 2:
-                    means = []
-                    for c in embs[dt]:
-                        cm = (c[0] * prop) + (c[1] * (1.0-prop))
-                        means.append(cm)
-                    embs[dt] = np.array(means)
-                else:
-                    embs[dt] = np.array([np.mean(c, axis=0) for c in embs[dt]])
-            else:
-                for levels in range(1, len(embeddings) + 2):
-                    level_inds = [i for i in range(len(embs[dt])) if len(embs[dt][i]) == levels]
-                    level_samps = [embs[dt][i] for i in level_inds]
-                    if len(level_samps):
-                        if levels == 1:
-                            for ii, i in enumerate(level_inds):
-                                embs[dt][i] = level_samps[ii][0]
-                        else:
-                            r = np.random.exponential(1, size=(len(level_samps), levels))
-                            r_normed = r / np.sum(r, axis=1)[..., None]
-                            for ii, i in enumerate(level_inds):
-                                props = r_normed[ii]
-                                weighed = [level_samps[ii][ei] * props[ei] for ei in range(levels)]
-                                embs[dt][i] = np.sum(weighed, axis=0)
-            embs[dt] = np.array(embs[dt])
-        if stacked:
-            return np.array(np.concatenate(list(embs.values())))
-        return embs
 
     def reconstruct(self, dataMap, channels:[str]=None, decoderPanels:[Data]=None, conditions:{Labeling:[str]}=None, bs=1024, stacked=False, mean=True):
+        """
+        Reconstruct data by using the UVAE's decoders.
+
+        Given a set of data points, this method will reconstruct them by predicting through the UVAE's decoders.
+        Reconstructed values can either be the original inputs or specific channels merged from different decoders.
+
+        Parameters
+        ----------
+        dataMap : DataMap or dict
+            Dictionary of data objects to sample indices.
+        channels : list of str, optional
+            List of channels to be reconstructed. If not provided, all channels are used.
+        decoderPanels : list of Data, optional
+            List of Data objects which decoders should be used for decoding.
+            If not provided, all decoders which contain a given channel are used.
+        conditions : dict of Normalisation or Labeling to list of str, optional
+            Conditions to be set as targets during reconstruction. For each Normalisation or Labeling set as key,
+            set a list of target conditions (you can set more than one if not all conditions exist across all data).
+        bs : int, optional
+            Batch size for processing.
+        stacked : bool, optional
+            If True, returns a single stacked array of reconstructed values; otherwise, returns a dictionary.
+        mean : bool, optional
+            If True, uses the mean value of latent samples during reconstruction. Otherwise uses stochastic samples.
+
+        Returns
+        -------
+        dict or np.array
+            Reconstructed data in the format of dictionary or stacked array based on `stacked` parameter.
+        """
         if not self.built:
             self.build()
         if channels is not None:
@@ -497,6 +767,22 @@ class UVAE:
 
 
     def addConstraint(self, const):
+        """
+        Add a constraint to the UVAE model.
+
+        This method allows for the addition of data or other constraints to the UVAE model.
+        If the constraint is of type Data, it will be appended as data. Otherwise, it will be appended as a constraint.
+
+        Parameters
+        ----------
+        const : Hashable
+            Constraint to be added. It can be of type Data or any other constraint type.
+
+        Returns
+        -------
+        object
+            The added constraint with its parent set to the current UVAE instance.
+        """
         if type(const) is Data:
             const = self.appendData(const)
         else:
@@ -505,7 +791,24 @@ class UVAE:
             const.parent = self
         return const
 
+
     def removeConstraint(self, const):
+        """
+        Remove a constraint from the UVAE model.
+
+        This method allows for the removal of data or other constraints from the UVAE model.
+        All references to the constraint in the UVAE's internal structures will be removed.
+
+        Parameters
+        ----------
+        const : Hashable
+            Constraint to be removed.
+
+        Returns
+        -------
+        UVAE
+            The UVAE instance with the constraint removed.
+        """
         if const.name in self.constraints:
             if const in self.data:
                 self.data.remove(const)
@@ -522,7 +825,25 @@ class UVAE:
                 del self.archives['resamplings'][const.name]
             return self
 
+
     def allDataMap(self, subsample=0):
+        """
+        Create a mapping of all the data in the UVAE model.
+
+        The method returns a DataMap containing indices for each data set in the UVAE model.
+        It optionally supports subsampling to retrieve a proportion of the data.
+
+        Parameters
+        ----------
+        subsample : int, optional
+            The number of samples to retrieve. If 0, all samples will be retrieved.
+            Otherwise, a proportion of the samples is determined based on the given subsample value.
+
+        Returns
+        -------
+        DataMap
+            A mapping of data sets to indices.
+        """
         dm = DataMap()
         sum = np.sum([len(data.X) for data in self.data])
         for data in self.data:
@@ -536,13 +857,42 @@ class UVAE:
                 dm[data] = inds
         return dm
 
+
     def constraintsType(self, t):
+        """
+        Retrieve constraints of a specific type from the UVAE model.
+
+        Parameters
+        ----------
+        t : type
+            The type of constraints to retrieve.
+
+        Returns
+        -------
+        list
+            A list of constraints of the specified type.
+        """
         return [c for c in self.constraints.values() if type(c) is t]
 
+
     def allConstraints(self):
+        """
+        Retrieve all constraints from the UVAE model.
+
+        This method returns a combined list of all non-data and autoencoder constraints in the UVAE model.
+
+        Returns
+        -------
+        list
+            A list of all constraints in the UVAE model.
+        """
         return list(self.constraints.values()) + list(self.autoencoders.values())
 
+
     def __getitem__(self, name):
+        """
+        Retrieve a data or constraint by name from the UVAE model.
+        """
         for d in self.data:
             if d.name == name:
                 return d
@@ -550,21 +900,53 @@ class UVAE:
             return self.constraints[name]
         return None
 
+
     def __add__(self, const):
+        """
+        Use `+` to add a constraint to the UVAE model.
+        """
         return self.addConstraint(const)
 
+
     def __iadd__(self, const):
+        """
+        Use `+=` to add a constraint to the UVAE model in-place.
+        """
         self + const
         return self
 
+
     def __sub__(self, const):
+        """
+        Use `-` to remove a constraint from the UVAE model.
+        """
         return self.removeConstraint(const)
 
+
     def __isub__(self, const):
+        """
+        Use `-=` to remove a constraint from the UVAE model in-place.
+        """
         self - const
         return self
 
+
     def uniqueName(self, base, names):
+        """
+        Generate a unique constraint name by appending an index to the given base name.
+
+        Parameters
+        ----------
+        base : str
+            Base string to use for generating the unique name.
+        names : list of str
+            List of existing names.
+
+        Returns
+        -------
+        str
+            A unique name.
+        """
         name = base
         i = 0
         while name in names:
@@ -572,7 +954,21 @@ class UVAE:
             name = '{}_({})'.format(base, int(i))
         return name
 
+
     def appendData(self, const):
+        """
+        Append a Data instance to the UVAE model.
+
+        Parameters
+        ----------
+        const : Data
+            Data instance to append to the UVAE model.
+
+        Returns
+        -------
+        Data
+            The appended Data instance.
+        """
         existingNames = [d.name for d in self.data]
         if const.name is None:
             const.name = self.uniqueName('Data', existingNames)
@@ -598,7 +994,25 @@ class UVAE:
         const.parent = self
         return const
 
+
     def appendConstraint(self, const):
+        """
+        Append a constraint to the UVAE model.
+
+        If the constraint is an Autoencoder with a single mask, it associates the
+        autoencoder with the corresponding data. For other constraints, it ensures
+        the constraint has a unique name and the appropriate masks and targets set.
+
+        Parameters
+        ----------
+        const : Constraint
+            Constraint instance to append to the UVAE model.
+
+        Returns
+        -------
+        Constraint
+            The appended Constraint instance or None if addition fails.
+        """
         if type(const) is Autoencoder and len(const.masks) == 1:
             data = list(const.masks.keys())[0]
             if data in self.autoencoders:

@@ -6,6 +6,22 @@ UVAE_DEBUG = 0
 
 
 class Hashable:
+    """
+    Base class that provides hashable functionality for constraints.
+    It also provides a structure for handling chained adding of constraints to UVAE model.
+
+    Attributes
+    ----------
+    name : str
+        Unique identifier for the constraint, used for hashing and representation.
+    _parent : Hashable or None
+        Reference to the parent object.
+
+    Methods
+    -------
+    parent() -> Hashable or None:
+        Get the parent of the current object.
+    """
     def __init__(self, name):
         self.name = name
         self._parent = None
@@ -33,6 +49,32 @@ class Hashable:
 
 
 class Data(Hashable):
+    """
+    A class representing a single data stream with related metadata.
+
+    It stores data (X) and optionally its normalized form, along with
+    feature names, cached predictions, and validation proportions.
+
+    Attributes
+    ----------
+    X : numpy array
+        The raw column data.
+    normed : numpy array or None
+        Normalized version of X, if available.
+    predictions : dict
+        Dictionary caching predictions related to this data.
+    channels : list of str
+        Names of channels or features in the data.
+    valProp : float
+        Proportion of data to be used for validation.
+
+    Methods
+    -------
+    defineValMask():
+        Defines a boolean mask for splitting data into validation based on valProp.
+    Xn() -> numpy array:
+        Returns the normalized data if available, otherwise the raw data.
+    """
     def __init__(self, X, name=None, channels=None, valProp=0.0):
         super().__init__(name)
         self.X = X
@@ -57,7 +99,16 @@ class Data(Hashable):
         else:
             return self.normed
 
+
 class DataMap(dict):
+    """
+    A dictionary storing references to Data objects and indexes referencing samples in each Data.
+
+    Methods
+    -------
+    allChannels() -> numpy array:
+        Returns list of all unique channels from all Data objects stored in the map.
+    """
     def __setitem__(self, key, value):
         if type(key) is Data:
             return super().__setitem__(key, value)
@@ -69,6 +120,52 @@ class DataMap(dict):
 
 
 class Mapping(Hashable):
+    """
+    A class referencing specific subsets of data.
+
+    This class extends the Hashable class and is designed to keep track of and
+    manipulate subsets of the Data class based on masks. These masks determine
+    which samples of the Data are considered under this mapping. It provides
+    methods to handle, index, and retrieve these subsets efficiently.
+
+    Attributes
+    ----------
+    masks : dict
+        A dictionary mapping Data objects to boolean masks representing the subset of the data.
+    _dataMap : dict or None
+        A mapping from Data to integer indexes in the data that are under this mapping.
+    _reverseMap : dict or None
+        A mapping from Data to a dictionary mapping from the index in the data to the index in the mapping.
+    _edges : list of int or None
+        Accumulative edges for separating different data objects in the flat representation.
+    _inds : ndarray or None
+        Flat indexes of all data samples under this mapping.
+    _valMask : ndarray or None
+        A mask indicating which samples are reserved for validation.
+
+    Methods
+    -------
+    addMask(data: Data, mask: ndarray):
+        Add or update a mask for a specific data.
+    index():
+        Indexes the masks for efficient data retrieval.
+    inds(validation: bool = False) -> ndarray:
+        Get the indexes of data samples under this mapping.
+    length(bs: int, validation: bool = False) -> int:
+        Calculate the number of batches given a batch size.
+    batch(bs: int, validation: bool = False) -> ndarray:
+        Get a random batch of indexes.
+    coords(inds: ndarray) -> dict:
+        Convert flat indexes to a dictionary of indexes for each data.
+    dataMap(inds: ndarray) -> DataMap:
+        Convert flat indexes to a DataMap object.
+    reverseMap(dataMap: DataMap, undefined=0) -> dict:
+        Convert a DataMap object to this mapping's internal representation.
+    stack(map: dict) -> ndarray:
+        Flatten the data map to a single array.
+    Xs(inds: ndarray, normed: bool = True) -> dict:
+        Retrieve data samples for the given indexes.
+    """
     def __init__(self, name=None, masks=None):
         super().__init__(name)
         self.masks = {}
@@ -177,6 +274,37 @@ class Mapping(Hashable):
 
 
 class Control(Mapping):
+    """
+    Extends the Mapping class to handle control masks and basic resampling functionality.
+
+    This class is designed to incorporate control masks to the original data masks. The control
+    masks can be used to further subset the data or to define specific conditions in which
+    data samples are considered. The class also provides functionalities to balance the
+    distribution of data samples based on some prediction, achieving an equal representation
+    of different classes.
+
+    Attributes
+    ----------
+    controlMasks : dict
+        A dictionary mapping Data objects to boolean masks representing control conditions.
+    _ctrlMask : ndarray or None
+        Combined control mask obtained from the union of all control masks and the original masks.
+    _resampled : ndarray or None
+        Indexes of data samples after the resampling operation.
+
+    Methods
+    -------
+    addControlMask(data: Data, mask: ndarray):
+        Add or update a control mask for a specific data.
+    calculateControlMask():
+        Compute the combined control mask.
+    inds(validation: bool = False, controls: bool = True, resampled: bool = True) -> ndarray:
+        Get the indexes of data samples under this mapping considering controls and resampling.
+    resampledInds(vals_list: list, prop: float = 1.0) -> ndarray:
+        Get the indexes of resampled data samples to balance class distribution.
+    balance(prediction, prop: float = 1.0):
+        Generate resampled data indexes to balance the distribution based on some prediction.
+    """
     def __init__(self, controlMasks=None, **kwargs):
         super().__init__(**kwargs)
         self.controlMasks = {}
@@ -246,6 +374,47 @@ class Control(Mapping):
 
 
 class Constraint(Control):
+    """
+    Base class for constraints in the UVAE model.
+
+    Constraints are used to apply specific annotations or conditions on the underlying data subsets
+    and can also implement additional trainable network layers that use those annotations. This class
+    encapsulates the functionalities needed to define, train, and apply these constraints.
+
+    Attributes
+    ----------
+    func : callable or None
+        The neural network function implementing the constraint.
+    loss : callable or None
+        Loss function associated with the constraint.
+    weight : float
+        Weighting factor for the importance of this constraint's loss to model selection.
+    frequency : float
+        Frequency with which this constraint is trained, by default 1.0.
+        This factor scales the number of batches for training relative to other constraints.
+        By default, number of batches is proportional to the amount of data each constraint spans.
+    trained : bool
+        Indicator of whether the constraint is trained or not.
+    hyper : dict
+        Dictionary storing hyperparameters specific to this constraint.
+    saved : dict
+        Dictionary to store archived parameters and settings of this constraint.
+
+    Methods
+    -------
+    archive() -> dict:
+        Archive the current state and parameters of this constraint.
+    unarchive(d: dict):
+        Restore the state and parameters of this constraint from an archive.
+    loadParams():
+        Load the parameters into the func from the saved state.
+    hyperparams() -> dict:
+        Retrieve hyperparameters associated with this constraint, including inherited ones.
+    outputDim() -> int or None:
+        Get the output dimension of the func. Returns None if func is not defined.
+    predict(X: ndarray, mean: bool = True) -> ndarray:
+        Apply the constraint (func) on input data X and return the transformed data.
+    """
     def __init__(self, func=None, loss=None, weight=1.0, frequency=1.0, **kwargs):
         super().__init__(**kwargs)
         self.func = func
@@ -304,6 +473,45 @@ class Constraint(Control):
 
 
 class Serial(Constraint):
+    """
+    Represents a sequence of constraints in the UVAE model, extending the basic Constraint functionalities.
+
+    The `Serial` class is designed to handle the sequential application of multiple constraints,
+    for example training a classifier which uses embedding from encoders as its input.
+    It also offers functionalities to make batched predictions, and caching of predictions.
+
+    Attributes
+    ----------
+    embedding : dict or None
+        A dictionary storing constraints which should be applied before this constraint for each data stream.
+    trainEmbedding : bool
+        Indicator of whether the embedding layers should also be trained with this constraint loss.
+    adversarial : bool
+        If True, and if trainEmbedding is True, the constraint will train the embedding layers in an adversarial manner.
+    in_dim : int or None
+        Input dimension for the constraint.
+
+    Methods
+    -------
+    archive() -> dict:
+        Archive the current state and parameters of this constraint, including its specific attributes.
+    unarchive(d: dict):
+        Restore the state and parameters of this constraint from an archive.
+    getInput(dataMap: dict, mean: bool = False) -> dict:
+        Obtain the representation of data up to this constraint.
+    embedMap(dataMap: dict, mean: bool = False, **kwargs) -> tuple:
+        Apply the constraint and return both input and prediction.
+    batchPrediction(dataMap: dict, mean: bool = True, bs: int = 4096, **kwargs) -> dict:
+        Perform batch-wise prediction using the constraint.
+    predictMap(dataMap: dict, mean: bool = True, stacked: bool = False, bs: int = 4096, **kwargs) -> dict:
+        Return representation after applying the constraint, optionally caching the result.
+    cachedPrediction(dataMap: dict) -> dict:
+        Retrieve cached predictions for a given data map.
+    cachePrediction(dataMap: dict, prediction: dict):
+        Store the predictions in cache for future use.
+    invalidateCache():
+        Invalidate (clear) the cached predictions.
+    """
     def __init__(self, embedding=None, trainEmbedding=False, adversarial=False, in_dim=None, **kwargs):
         super().__init__(**kwargs)
         self.embedding = embedding if embedding is not None else {}
@@ -430,6 +638,35 @@ class Serial(Constraint):
 
 
 class Regression(Serial):
+    """
+    Represents a regression constraint in the UVAE model, usually applied in a serial fashion
+    after embedding data to the latent space.
+
+    Attributes
+    ----------
+    Y : dict
+        Dictionary storing the originally supplied (unmasked) targets.
+    targets : dict
+        Dictionary storing valid regression targets for each data.
+    nullLabel : variable type or None
+        The label considered as null in the targets supplied to Y.
+        The samples with this target are excluded from training.
+
+    Methods
+    -------
+    setTargets(data: type, Y: type):
+        Assign regression targets for the specified data.
+    outputDim() -> int:
+        Determine the output dimension based on the regression targets.
+    build():
+        Build the regression layers based on the hyperparameters and architecture defined.
+    Ys(inds: list) -> dict:
+        Retrieve regression targets for the specified indexes.
+    YsFromMap(dataMap: dict, undefined: variable type = None) -> dict:
+        Retrieve regression targets based on the data map provided.
+    forward(inds: list) -> tuple:
+        Execute the forward pass of the regression model for the specified indexes, returning the loss.
+    """
     def __init__(self, Y=None, targets=None, nullLabel=None, trainEmbedding=True, **kwargs):
         super().__init__(trainEmbedding=trainEmbedding, **kwargs)
         if Y is None:
@@ -497,6 +734,34 @@ class Regression(Serial):
 
 
 class Classification(Regression):
+    """
+    Extends the 'Regression' constraint to categorical target type.
+
+    This class provides functionalities to enumerate class labels, construct a classification model,
+    perform one-hot encoding, and handle class imbalances.
+
+    Attributes
+    ----------
+    enum : list or None
+        List of unique class labels identified from the target data.
+    equalizeLabels : bool
+        Indicates whether the class distribution should be equalized during training.
+
+    Methods
+    -------
+    enumerateLabels():
+        Identify and store unique class labels from the target data.
+    oneHot(Ys: dict) -> dict:
+        Convert class labels into one-hot encoded format.
+    resample(target: Control):
+        Add a target constraint for resampling to handle class imbalances.
+    balance(prediction: dict = None, prop: float = 1.0):
+        Calculate indexes to balance the class distribution in the training data.
+    categorize(emb: dict, softmax: bool = True, called: bool = True, stacked: bool = False) -> dict:
+        Convert softmax outputs or logits to class labels.
+    predictMap(dataMap: dict, softmax: bool = True, mean: bool = True, called: bool = True, stacked: bool = False, bs: int = 4096) -> dict:
+        Predict class labels for the given data map.
+    """
     def __init__(self, Y=None, equalizeLabels=False, **kwargs):
         super().__init__(Y=Y, **kwargs)
         self.enum = None
@@ -583,6 +848,11 @@ class Classification(Regression):
 
 
 class Labeling(Classification):
+    """
+    The 'Labeling' class is used for fixed non-trainable categorical assignments,
+    such as known labellings, batch assignments etc. Unlike 'Classification' it does not
+    implement a prediction network, but instead always returns the provided labels.
+    """
     def __init__(self, nullLabel=None, **kwargs):
         super().__init__(nullLabel=nullLabel, **kwargs)
         self.trained = True
@@ -600,13 +870,67 @@ class Labeling(Classification):
 
 
 class Encoder(Serial):
+    """
+    The Encoder class is used to encode input data into latent representations.
+    Conditional encoding is supported by concatenating the condition representations to the inputs.
+    Can also be used to subset the data input to desired columns only.
+
+    Attributes
+    ----------
+    channels : list or None
+        List of feature names corresponding to input columns.
+    channelMaps : dict or None
+        Dictionary mapping data columns to supported input channels.
+    condFuncs : dict
+        Conditional functions to be appended to the input data before encoding.
+
+    Methods
+    -------
+    build(in_dim: int, n_dense: int, relu_slope: float, dropout: float, depth: int, out_len: int, variational: bool = False, categorical: bool = False, condFuncs: dict = None) -> tuple:
+        Build the encoder model based on the provided specifications.
+    getInput(dataMap: dict, mean: bool = False) -> dict:
+        Obtain the input representation for the encoder.
+    embedMap(dataMap: dict, mean: bool = False, **kwargs) -> tuple:
+        Apply the encoder to the provided data map and return both the input and encoded representations.
+
+    """
     def __init__(self, channels=None, channelMaps=None, **kwargs):
         super().__init__(**kwargs)
         self.channels = channels
         self.channelMaps = channelMaps
         self.condFuncs = {}
 
+
     def build(self, in_dim, n_dense, relu_slope, dropout, depth, out_len, variational=False, categorical=False, condFuncs=None):
+        """
+        Build the encoder based on the provided specifications.
+
+        Parameters
+        ----------
+        in_dim : int
+            Input dimensionality.
+        n_dense : int
+            Number of dense units.
+        relu_slope : float
+            Slope for the LeakyReLU activation function.
+        dropout : float
+            Dropout rate.
+        depth : int
+            Depth of the MLP.
+        out_len : int
+            Output length.
+        variational : bool, optional
+            If True, the encoder is built as a variational encoder.
+        categorical : bool, optional
+            If True, the encoder output undergoes a softmax activation.
+        condFuncs : dict, optional
+            Conditional functions to be applied to the input data.
+
+        Returns
+        -------
+        tuple
+            A tuple containing the input tensor and the encoded output tensor.
+        """
         inp = Input((int(in_dim),))
         self.condFuncs = condFuncs
         c_ins = []
@@ -636,15 +960,47 @@ class Encoder(Serial):
             self.func = keras.Model([inp] + c_ins, z, name=self.name)
         return inp, z
 
-    # obtain representation for input, selected channels only
+
     def getInput(self, dataMap, mean=False):
+        """
+        Obtain the input representation for the encoder, considering only selected channels.
+
+        Parameters
+        ----------
+        dataMap : dict
+            Dictionary mapping data types to their respective representations.
+        mean : bool, optional
+            If True, the mean representation is obtained.
+
+        Returns
+        -------
+        dict
+            Dictionary containing the input representations.
+        """
         Xs = super(Encoder, self).getInput(dataMap, mean=mean)
         for data in Xs:
             if (self.channelMaps is not None) and (data in self.channelMaps):
                 Xs[data] = tf.gather(Xs[data], self.channelMaps[data], axis=-1)
         return Xs
 
+
     def embedMap(self, dataMap, mean=False, **kwargs):
+        """
+        Apply the encoder to the provided data map. If conditional encoding is used,
+        the condition representations are appended to the input before encoding.
+
+        Parameters
+        ----------
+        dataMap : dict
+            Dictionary mapping data types to their respective representations.
+        mean : bool, optional
+            If True, the mean representation is obtained.
+
+        Returns
+        -------
+        tuple
+            A tuple containing dictionaries of the input and encoded representations.
+        """
         ins = self.getInput(dataMap, mean)
         outs = {}
         for data in dataMap:
@@ -658,6 +1014,20 @@ class Encoder(Serial):
 
 
 class Unbiasing(Encoder):
+    """
+    The Unbiasing class extends the functionalities of the `Encoder` class to adjust the encoded representation
+    by subtracting the biases of conditions specified using the 'Normalisation' constraints.
+
+    Attributes
+    ----------
+    offsets : dict
+        Dictionary that maps conditions to mean offsets.
+
+    Methods
+    -------
+    embedMap(dataMap: dict, mean: bool = False) -> tuple:
+        Apply the embedding and unbiasing transformation to the provided data map and return both the input and corrected representations.
+    """
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.offsets = {}
@@ -667,13 +1037,49 @@ class Unbiasing(Encoder):
         return super(Unbiasing, self).build(**kwargs)
 
     def predict(self, X, mean=False):
+        """
+        Predict the latent embedding and returns either mean or sampled representation.
+
+        Parameters
+        ----------
+        X : array_like
+            Input data.
+        mean : bool, optional
+            If True, returns the mean representation.
+
+        Returns
+        -------
+        array_like
+            The encoded representation of the data.
+
+        Notes
+        -----
+        This function does not apply the latent space normalisation. To obtain latent embedding in the
+        unbiased form (with batch offsets subtracted) use the 'predictMap' function, which internally calls 'embedMap'.
+        """
         m, v, z = self.func(X)
         if mean:
             return m
         else:
             return z
 
+
     def embedMap(self, dataMap, mean=False):
+        """
+        Embed the data to latent space and apply the unbiasing transformations.
+
+        Parameters
+        ----------
+        dataMap : dict
+            Subset of data objects and indexes to embed.
+        mean : bool, optional
+            If True, the mean representation is obtained.
+
+        Returns
+        -------
+        tuple
+            A tuple containing dictionaries of the input and the corrected latent representations.
+        """
         Xs, Zs = super(Unbiasing, self).embedMap(dataMap, mean=mean)
         corr = {data: np.zeros(tuple(Zs[data].shape), dtype=float) for data in Zs}
         for const in self.offsets:
@@ -699,12 +1105,59 @@ class Unbiasing(Encoder):
 
 
 class Decoder(Serial):
+    """
+    The Decoder class with optional conditioning appended to the latent space input.
+
+    Attributes
+    ----------
+    condFuncs : dict
+        Dictionary that maps conditions to functions used for conditioning.
+    autoencoder : Autoencoder object
+        Associated autoencoder that contains this decoder.
+
+    Methods
+    -------
+    build(in_dim, n_dense, relu_slope, dropout, depth, out_len, condFuncs=None) -> tuple:
+        Build the decoder based on the provided specifications.
+    embedMap(dataMap: dict, mean: bool = False, conditions: dict = None) -> tuple:
+        Decode the provided data map, conditioned on certain labels.
+
+    Notes
+    -----
+    The Decoder class is designed to decode encoded representations back to their original space.
+    It can be conditioned on certain labels to produce specific outputs.
+    """
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.condFuncs = {}
         self.autoencoder = None
 
     def build(self, in_dim, n_dense, relu_slope, dropout, depth, out_len, condFuncs=None):
+        """
+        Build the decoder based on the provided specifications.
+
+        Parameters
+        ----------
+        in_dim : int
+            Dimension of the input.
+        n_dense : int
+            Number of dense units in the MLP.
+        relu_slope : float
+            Slope of the ReLU activation function.
+        dropout : float
+            Dropout rate.
+        depth : int
+            Depth of the MLP.
+        out_len : int
+            Length of the output.
+        condFuncs : dict, optional
+            Dictionary of conditioning functions.
+
+        Returns
+        -------
+        tuple
+            A tuple containing the input tensor, conditioning input tensors, and the decoded output tensor.
+        """
         self.condFuncs = condFuncs
         z_inp = Input((int(in_dim),))
         c_ins = []
@@ -727,6 +1180,23 @@ class Decoder(Serial):
         return z_inp, c_ins, out
 
     def embedMap(self, dataMap, mean=False, conditions:{Labeling:[str]}=None):
+        """
+        Decode the provided data map, optionally appending conditioning.
+
+        Parameters
+        ----------
+        dataMap : dict
+            Subset of data objects and indexes to embed.
+        mean : bool, optional
+            If True, the mean representation is used for decoding.
+        conditions : dict, optional
+            Dictionary mapping conditions to list of targets.
+
+        Returns
+        -------
+        tuple
+            A tuple containing dictionaries of the input and the decoded representations.
+        """
         # In case of straight through reconstruction, without changing batch target:
         if np.all([d in self.autoencoder.masks for d in dataMap]) and conditions is None:
             _, Rec = self.autoencoder.embedMap(dataMap, mean=mean)
@@ -775,7 +1245,6 @@ class Decoder(Serial):
                 cs = []
                 for c in self.condFuncs:
                     useBatch = selectBatch(c, c.enum)
-                    #print(self.name, c.name, useBatch)
                     oh = np.zeros(len(c.enum), dtype=int)
                     if useBatch is not None:
                         # using the specified decoding condition, else zeros will be used
@@ -787,8 +1256,40 @@ class Decoder(Serial):
 
 
 class Autoencoder(Serial):
+    """
+    The Autoencoder class that combines encoding and decoding functionalities.
+
+    This class offers the ability to build both standard and variational autoencoders,
+    with optional conditioning of encoders and decoders on specific labels. The encoder can optionally
+    be 'Unbiasing', which applies the latent space normalisation before returning latent representations.
+
+    Methods
+    -------
+    build():
+        Constructs the autoencoder by building both the encoder and the decoder parts.
+    """
     def __init__(self, name, conditions:[Classification]=None, condEncoder=True, in_dim=None, latent_dim=None,
                  variational=True, categorical=False, **kwargs):
+        """
+                Initializes the Autoencoder with the given parameters.
+
+                Parameters
+                ----------
+                name : str
+                    The name of the autoencoder.
+                conditions : list, optional
+                    List of conditions to which the autoencoder will be conditioned upon.
+                condEncoder : bool, default=True
+                    If True, the encoder is conditioned together with decoder.
+                in_dim : int
+                    Dimension of the input data.
+                latent_dim : int, optional
+                    Dimension of the latent space.
+                variational : bool, default=True
+                    If True, constructs a variational autoencoder.
+                categorical : bool, default=False
+                    If True, the latent representation is categorical.
+        """
         super().__init__(name=name, in_dim=in_dim, **kwargs)
         self.latent_dim = latent_dim
         self.variational = variational
@@ -920,6 +1421,31 @@ class Autoencoder(Serial):
 
 
 class Subspace(Autoencoder):
+    """
+    The Subspace class extends the Autoencoder class to embed data into shared subspaces.
+
+    This class is designed for scenarios where different datasets share common channels or features.
+    It provides functionality to map these shared channels and ensure that their embeddings are aligned
+    across datasets.
+
+    Attributes
+    ----------
+    channels : list
+        List of shared channels across datasets.
+    channelMaps : dict
+        Dictionary mapping each dataset channels to subset of shared channels.
+    pull : float
+        Weight for the merging loss that pulls embeddings of shared channel latent representations together.
+
+    Methods
+    -------
+    build():
+        Constructs the subspace autoencoder and sets up the shared channels.
+    mapSharedChannels():
+        Identifies and maps the shared channels across datasets.
+    forward(inds, mean=False) -> tuple:
+        Computes the forward pass of the subspace autoencoder, including the merging loss.
+    """
     def __init__(self, channels=None, variational=True, trainEmbedding=True, pull=1.0, **kwargs):
         super().__init__(in_dim=None, variational=variational, trainEmbedding=trainEmbedding, **kwargs)
         self.channels = channels
@@ -946,6 +1472,12 @@ class Subspace(Autoencoder):
         self.pull = d['pull']
 
     def mapSharedChannels(self):
+        """
+        Constructs the subspace autoencoder and sets up the shared channels.
+
+        This method first identifies the shared channels across datasets and then builds the autoencoder
+        to embed data into a shared subspace.
+        """
         d_chs = [p.channels for p in self.masks.keys()]
         if self.channels is None:
             shared = set(d_chs[0])
@@ -976,13 +1508,63 @@ class Subspace(Autoencoder):
 
 
 class Projection(Autoencoder):
+    """
+    The Projection class implements an Autoencoder to project data from latent space to a lower dimensional
+    space (2D by default), typically for visualisation purposes.
+
+    Notes
+    -----
+    When adding 'Projection' as a constraint to a UVAE model, an autoencoder is created which takes latent representations
+    as input, and projects them to 2D space. By default, this does not affect the original embeddings (trainEmbedding is set to False).
+    """
     def __init__(self, latent_dim=2, trainEmbedding=False, variational=False, **kwargs):
+        """
+        Initializes the Projection with the given parameters.
+
+        Parameters
+        ----------
+        latent_dim : int, default=2
+            Dimension of the latent space. Typically set to 2 or 3 for visualization purposes.
+        trainEmbedding : bool, default=False
+            If True, the Projection loss is backpropagated through the main encoders in training.
+        variational : bool, default=False
+            If True, constructs a variational autoencoder.
+        """
         super().__init__(latent_dim=latent_dim,
                          variational=variational,
                          trainEmbedding=trainEmbedding, **kwargs)
 
 
 class Normalization(Labeling):
+    """
+    The Normalization class extends the Labeling class to handle normalization operations, specifically in the
+    context of batch effect correction.
+
+    This class is designed to calculate and correct for batch-specific biases in the data, working with 'Unbiasing'
+    class of encoders, thereby ensuring that data across different batches are comparable.
+
+    Attributes
+    ----------
+    target : str, optional
+        The name of the target batch to which other batches will be aligned.
+    balanceBatchAvg : bool, default=True
+        If True, balance control data to equalize proportions between batches. If False, use equal class proportions.
+    interval : int, default=1
+        The interval for normalization operations.
+    useClasses : list, optional
+        A list of classes to include when resampling the constraint.
+        Classes are a subset of the resampling source predictions (e.g. cell types, not a subset of batches).
+    trained : bool, default=False
+        Indicates if the constraint has been trained (and offsets should no longer be updated).
+
+    Methods
+    -------
+    resampledInds(vals_list: list, prop: float=1.0, dropMissing: bool=False) -> np.ndarray:
+        Resample indices based on given class labeling(s).
+    calculateBias(encoders: dict, prop: float=1.0):
+        Update batch-specific biases in the latent space.
+
+    """
     def __init__(self, target=None, balanceBatchAvg=True, interval=1, useClasses:list=None, **kwargs):
         super().__init__(**kwargs)
         self.target = target
@@ -1009,8 +1591,27 @@ class Normalization(Labeling):
         self.interval = d['interval']
         self.balanceBatchAvg = d['balanceBatchAvg']
 
-    # balance control data to equalize proportions within batches
     def resampledInds(self, vals_list, prop=1.0, dropMissing=False):
+        """
+        Resamples indices based on given class labelling(s). This function is used to
+        ensure that the samples from different classes are represented equally (or in
+        the same proportion across batches) when calculating the batch normalisation offsets.
+
+        Parameters
+        ----------
+        vals_list : list
+            A list containing class predictions for the normalised data to be used for resampling.
+            If more than one assignment is given, an equal portion of the data is resampled using each assignment.
+        prop : float, default=1.0
+            Proportion of data resampled (increased each epoch depending on the 'ease_epochs' hyper-parameter).
+        dropMissing : bool, default=False
+            If True, classes that are missing in any batch will be ignored during resampling.
+
+        Returns
+        -------
+        np.ndarray
+            An array of indices corresponding to the resampled data.
+        """
         inds = self.inds(validation=False, controls=True, resampled=False)
         B = self.stack(self.Ys(inds, called=True))
         all_inds = np.arange(len(B))
@@ -1089,6 +1690,25 @@ class Normalization(Labeling):
 
 
     def calculateBias(self, encoders: {Data: Unbiasing}, prop=1.0):
+        """
+        Calculates batch-specific biases in the latent embedding using the provided encoders. These biases
+        are then used after encoding to adjust the data such that it is more consistent across batches.
+        The function computes the bias for each batch relative to a target batch or the average
+        of all batches, and saves the offsets independently for each encoder.
+
+        Parameters
+        ----------
+        encoders : dict
+            A dictionary mapping data to their corresponding Unbiasing encoders.
+        prop : float, default=1.0
+            Proportion by which the calculated bias should be applied.
+            For instance, prop=0.5 would apply half of the calculated bias.
+
+        Notes
+        -----
+        The function modifies the 'offsets' attribute of the provided encoders in-place,
+        adding or updating the calculated biases.
+        """
         inds = self.inds(controls=True, resampled=True)
         Map = self.dataMap(inds)
         Bs = self.Ys(inds)
@@ -1097,6 +1717,7 @@ class Normalization(Labeling):
             if data in encoders:
                 enc = encoders[data]
                 if self in enc.offsets:
+                    # Erase the existing offset corrections before calculating new offsets
                     del enc.offsets[self]
                 Zs = enc.predictMap({data: Map[data]}, mean=True)
                 Z = Zs[data]
@@ -1120,6 +1741,10 @@ class Normalization(Labeling):
 
 class Standardization(Normalization):
     def __init__(self, **kwargs):
+        """
+        Initializes the Standardization class, which is responsible for performing
+        batch-wise standardization (z-score normalization) on the data.
+        """
         super().__init__(**kwargs)
         self.stats = {}
 
@@ -1137,6 +1762,11 @@ class Standardization(Normalization):
         self.standardizeData()
 
     def calculateStats(self):
+        """
+        Calculates the mean and standard deviation for each batch in the data.
+        The results are stored in the 'stats' attribute, which maps batch IDs
+        to their corresponding statistics.
+        """
         inds = self.inds(controls=True, resampled=True)
         Map = self.dataMap(inds)
         Xs = self.Xs(inds, normed=False)
@@ -1154,6 +1784,10 @@ class Standardization(Normalization):
                                     'sd': np.std(b_vals, axis=0)}
 
     def standardizeData(self):
+        """
+        Applies standardization to the data based on the previously calculated batch-wise
+        statistics. The standardized data is then returned by each 'Data' constraint instead of the original data.
+        """
         allBs = self.Ys(self._inds, called=True)
         Map = self.dataMap(self._inds)
         for data in allBs:
@@ -1168,6 +1802,21 @@ class Standardization(Normalization):
 
 
 class MMD(Normalization):
+    """
+    The MMD (Maximum Mean Discrepancy) class which extends the Normalization class.
+    This class is responsible for calculating a statistical test for the difference
+    in distributions between two groups, then using a loss to minimise that difference.
+    As a result, specified groups become aligned in the latent representation.
+
+    Attributes:
+    -----------
+    pull: float
+        Strength of the MMD loss which converges the encoders.
+    kernel: function, optional
+        Kernel function to compute the MMD.
+    tile: bool
+        Determines if all pairwise sample comparisons should be included in MMD calculation.
+    """
     def __init__(self, trainEmbedding=True, pull=1.0, **kwargs):
         super(MMD, self).__init__(trainEmbedding=trainEmbedding, **kwargs)
         self._trainYs = None
@@ -1198,6 +1847,9 @@ class MMD(Normalization):
         self._kernelFunc = None
 
     def getIndexLabels(self):
+        """
+        Retrieves condition labels corresponding to the indexed data and stores them for faster sampling.
+        """
         inds = self.inds(validation=False)
         self._trainYs = self.stack(self.Ys(inds, called=True))
         inds_val = self.inds(validation=True)
@@ -1210,7 +1862,9 @@ class MMD(Normalization):
         self.getIndexLabels()
 
     def batch(self, bs, validation=False):
-        # select samples from two random conditions
+        """
+        Selects random samples from two random conditions.
+        """
         inds = self.inds(validation=validation)
         conditions = [self.enum[n] for n in np.random.permutation(len(self.enum))[0:2]]
         ys = self._trainYs if not validation else self._valYs
@@ -1223,6 +1877,9 @@ class MMD(Normalization):
         return selInds
 
     def cartesianProduct(self, x, y):
+        """
+        Expands the data to contain all pairwise comparisons between datapoints.
+        """
         x_size = K.shape(x)[0]
         y_size = K.shape(y)[0]
         dim = K.shape(x)[1]
@@ -1231,6 +1888,19 @@ class MMD(Normalization):
         return tiled_x, tiled_y
 
     def multiscaleGaussian(self, x, y):
+        """
+        Computes a multiscale Gaussian kernel between x and y.
+
+        Parameters:
+        -----------
+        x, y: array-like
+            Input arrays.
+
+        Returns:
+        --------
+        array-like:
+            Kernel values.
+        """
         if self.tile:
             x, y = self.cartesianProduct(x, y)
         sigmas = [1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1, 5, 10, 15, 20, 25, 30, 35, 100, 1e3, 1e4, 1e5, 1e6]
@@ -1243,11 +1913,37 @@ class MMD(Normalization):
         return K.reshape(tf.reduce_sum(input_tensor=tf.exp(-s), axis=0), K.shape(distances)) / len(sigmas)
 
     def mmd2(self, x, y):
+        """
+        Computes the MMD squared loss between x and y.
+
+        Parameters:
+        -----------
+        x, y: array-like
+            Input arrays.
+
+        Returns:
+        --------
+        float:
+            MMD squared value.
+        """
         return K.mean(self.multiscaleGaussian(x, x)) \
                + K.mean(self.multiscaleGaussian(y, y)) \
                - (2*K.mean(self.multiscaleGaussian(x, y)))
 
     def forward(self, inds):
+        """
+        Computes the forward pass, calculating the MMD loss.
+
+        Parameters:
+        -----------
+        inds: array-like
+            Indices of the samples.
+
+        Returns:
+        --------
+        tuple:
+            Dictionary of losses and weighed loss value.
+        """
         Map = self.dataMap(inds)
         Zs = self.getInput(Map, mean=True)
         Z_cat = tf.concat([Zs[data] for data in Map], axis=0)
@@ -1271,6 +1967,56 @@ class MMD(Normalization):
 
 
 class History:
+    """
+    Maintains a record of training metrics and provides utilities for early stopping.
+
+    The History class tracks the performance metrics over training epochs. It also includes functionality to monitor
+    a given validation metric for early stopping, either based on lack of improvement or when the training loss
+    reaches a threshold.
+
+    Attributes
+    ----------
+    epoch : int
+        Current epoch number.
+    earlyStop : int
+        Number of epochs with no improvement in the specified key metric after which training should be stopped.
+    earlyStopKey : str
+        The key metric to monitor for early stopping.
+    stopLoss : float
+        Threshold for the training loss; training stops when the loss goes below this value.
+    shouldStop : bool
+        Flag indicating if the training should stop based on the provided criteria.
+    noImprovement : int
+        Counter for the number of epochs without improvement in the specified key metric.
+    minValLoss : float
+        Minimum validation loss observed so far.
+    improved : bool
+        Flag indicating if the specified key metric has improved in the current epoch.
+    history : dict
+        Dictionary to store the accumulated values for each metric across epochs.
+    accum : dict
+        Temporary storage to accumulate values within an epoch.
+    timers : dict
+        Dictionary to track time-related information for various processes.
+
+    Methods
+    -------
+    append(key: str, value: float):
+        Append a value to the accumulator for a given metric key.
+    change(key: str, change: float):
+        Change the last value in the accumulator for a given metric by a specified amount.
+    accumulate(sum=True):
+        Calculate the sum or mean of the accumulated values for each metric, add to the history, and check stopping criteria.
+    time(name: str, reset=True) -> float:
+        Record or retrieve the time for a specified process.
+    print(s='') -> str:
+        Print a summary of the metrics for the current epoch.
+
+    Notes
+    -----
+    This class is designed to be used alongside training loops to keep track of performance metrics and potentially
+    stop training early based on specified criteria.
+    """
     def __init__(self, earlyStop=0, stopLoss=0, earlyStopKey='val_loss'):
         self.epoch = 0
         self.earlyStop = earlyStop # stop based on key loss not improving
@@ -1347,6 +2093,46 @@ class History:
 
 
 class LisiValidationSet:
+    """
+    A utility class for LISI (Local Inverse Simpson's Index) based model selection.
+
+    This class is used to reference a fixed set of data for LISI calculation, and optionally
+    updating class predictions.
+
+    Attributes
+    ----------
+    dm : DataMap
+        The data map object referencing the samples to validate.
+    normClasses : bool
+        Flag to determine if the classes should be normalized between batches.
+    perplexity : int
+        The perplexity value used for LISI calculation, which determines the size of local neighborhoods.
+    batchWeight : float
+        Weight for the batch constraint in LISI calculation.
+    labelWeight : float
+        Weight for the label constraint in LISI calculation.
+    batchConstraint : Labeling
+        Labeling constraint containing batch assignments.
+    labelConstraint : Labeling
+        Labeling constraint for class labelling (or a classifier making dynamic class predictions).
+    batchRange : tuple, optional
+        Range for batch constraint, defaults to the range of unique batches.
+    labelRange : tuple, optional
+        Range for label constraint, defaults to the range of unique labels.
+    batch : array-like
+        Batch labels as predicted from the batch constraint.
+    labeling : array-like
+        Class labels as predicted from the label constraint.
+
+    Methods
+    -------
+    update():
+        Update the batch and label arrays using the provided constraints.
+
+    Notes
+    -----
+    This class is designed to store a fixed sample subset during model selection.
+    """
     def __init__(self, dm:DataMap,
                  batchConstraint:Labeling,
                  labelConstraint:Labeling,
@@ -1377,9 +2163,39 @@ class LisiValidationSet:
             self.labelRange = (1, len(set(self.labeling)))
 
 
-
-
 class ModelSelectionHistory:
+    """
+    Stores the history of results during the model selection process and ensures
+    the desired number of iterations has been evaluated.
+
+    This class maintains a history of past results and a set of current results.
+    The history can be compounded to group sets of results,
+    e.g., after finishing a hyperparameter search round.
+
+    Attributes
+    ----------
+    source : UVAE
+        The optimised UVAE model.
+    targetIterations : int
+        Total number of intended iterations or configurations to be evaluated.
+    currentResults : list
+        List of results for the ongoing round of evaluations.
+    pastResults : list of lists
+        Nested list where each sublist corresponds to a set of results from past rounds.
+
+    Methods
+    -------
+    results():
+        Returns a flattened list of all results, both current and past.
+    __len__():
+        Returns the total number of results recorded so far.
+    addIterations(i: int):
+        Increments the target number of iterations by `i` and returns the number of results still needed.
+    compound():
+        Moves current results to the past results list and resets current results.
+    addResult(arr: list):
+        Adds a list of results to the current results.
+    """
     def __init__(self, source):
         self.source = source
         self.targetIterations = 0
