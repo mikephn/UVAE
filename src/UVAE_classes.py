@@ -952,12 +952,12 @@ class Encoder(Serial):
                                   latent_len=out_len,
                                   input_len=out_len)
             z_mean, z_log_var, z = enc(in_cat)
-            self.func = keras.Model([inp] + c_ins, [z_mean, z_log_var, z], name=self.name)
+            self.func = keras.Model([inp] + c_ins, [z_mean, z_log_var, z], name=self.name.replace(" ", "_"))
         else:
             z = enc(in_cat)
             if categorical:
                 z = keras.layers.Activation('softmax')(z)
-            self.func = keras.Model([inp] + c_ins, z, name=self.name)
+            self.func = keras.Model([inp] + c_ins, z, name=self.name.replace(" ", "_"))
         return inp, z
 
 
@@ -1175,7 +1175,7 @@ class Decoder(Serial):
                   depth=depth,
                   out_len=int(out_len))
         out = dec(z_cat)
-        self.func = keras.Model([z_inp] + c_ins, out, name=self.name)
+        self.func = keras.Model([z_inp] + c_ins, out, name=self.name.replace(" ", "_"))
         self.loss = keras.losses.MSE
         return z_inp, c_ins, out
 

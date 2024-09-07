@@ -972,8 +972,6 @@ class UVAE:
         existingNames = [d.name for d in self.data]
         if const.name is None:
             const.name = self.uniqueName('Data', existingNames)
-        else:
-            const.name = const.name.replace(" ", "_")
         if const.channels is None:
             const.channels = ['{} ch.{}'.format(const.name, cn) for cn in range(const.X.shape[-1])]
         if const.name in existingNames:
