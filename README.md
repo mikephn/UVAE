@@ -264,6 +264,22 @@ ctype.resample(ln)
 
 When *balanceBatchAvg* is set to *True*, it makes resampling first determine the proportions of classes across all batches, then resample to a mean proportion. If set to *False*, each class is sampled equally (not preserving global proportions). When classes are not shared across batches (for example, when independent clustering is used), this parameter should be set to *False*.
 
+For example, in a situation where we don't have labels, we can cluster each batch independently. A helper function is provided to perform per-batch GMM clustering:
+
+```python
+from src.UVAE_diag import gmmClustering
+# path to save the resulting clustering so it is consistent between runs
+gmm_save_path = "gmm-10.pkl" 
+# given Data constraint p0 with corresponding B0 batch assignment, create one clustering of 10 components per batch
+X0_batch_specific_clusters = gmmClustering(p0.X, B=B0, path=gmm_save_path, comps=[10])[0]
+# add as a Labeling constraint
+b_clust = uv + Labeling(Y={p0: X0_batch_specific_clusters}, name='Batch clustering') 
+# target constraint must be set to sample equally from each cluster identity
+ln = uv + Normalization(Y=batch.Y, name='Latent norm', balanceBatchAvg=False)
+# set resampling target
+b_clust.resample(ln)
+```
+
 More than one resampling can be added to each target, in which case the underlying data will be divided into equal parts for each source. Additionally, the resampling and normalisation constraints can be eased in, so that classifiers have time to train. This is determined by *ease_epochs* parameter in UVAE_hyper.py.
 
 ### 2.5 Conditional generation of data
