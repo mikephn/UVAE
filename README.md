@@ -327,7 +327,7 @@ uv.optimize(iterations=20, # training attempts
 
 *Subset* is a list of hyper-parameter names. To include *pull* or *frequency* of individual constraints, use *pull-name* or *frequency-name* with the constraint name.
 
-LISI metric can be included in the hyper-parameter optimisation loss. First, create an object storing information for LISI calculation:
+LISI metric can be included in the hyper-parameter optimisation loss. First, create an object storing information for LISI calculation, then pass it to the optimization call.
 
 ```python
 lisiSet = LisiValidationSet(dm=uv.allDataMap(), # data range to calculate LISI over
@@ -339,6 +339,10 @@ lisiSet = LisiValidationSet(dm=uv.allDataMap(), # data range to calculate LISI o
                             batchRange=(1.0, 10.0), # expected range of score for batch labeling (defaults to min:1.0, max:number of batches)
                             batchWeight=1.0, # batch score contribution
                             perplexity=100) # LISI perplexity parameter
+
+uv.optimize(iterations=20, maxEpochs=50,
+            lossWeight=1.0, # scaling factor for the main loss compared to LISI or other custom loss
+            lisiValidationSet=lisiSet)
 ```
 
 Any other metric can be added as a hyper-parameter optimisation loss by specifying a function which is called after each optimisation run. This function should accept the newly trained model as input, and return the loss contribution (lower is better):
