@@ -941,7 +941,7 @@ class Encoder(Serial):
             for c_func in self.condFuncs.values():
                 c_ins.append(c_func.input)
                 ins.append(c_func.output)
-            in_cat = tf.concat(ins, axis=-1)
+            in_cat = keras.layers.Concatenate(axis=-1)(ins)
         enc = MLP(n_dense=n_dense,
                   relu_slope=relu_slope,
                   dropout=dropout,
@@ -1009,6 +1009,7 @@ class Encoder(Serial):
                 cs = [c.predictMap({data: dataMap[data]}, stacked=True, mean=True, called=False)
                       for c in self.condFuncs]
                 enc_inp.extend(cs)
+            enc_inp = [tf.convert_to_tensor(x) for x in enc_inp]
             outs[data] = self.predict(enc_inp, mean=mean)
         return ins, outs
 
@@ -1168,7 +1169,7 @@ class Decoder(Serial):
             for c_func in self.condFuncs.values():
                 c_ins.append(c_func.input)
                 zs.append(c_func.output)
-            z_cat = tf.concat(zs, axis=-1)
+            z_cat = keras.layers.Concatenate(axis=-1)(zs)
         dec = MLP(n_dense=n_dense,
                   relu_slope=relu_slope,
                   dropout=dropout,
@@ -1251,6 +1252,7 @@ class Decoder(Serial):
                         oh[int(list(c.enum).index(useBatch))] = 1
                     cs.append(np.tile(oh, (len(dataMap[data]), 1)))
                 dec_inp.extend(cs)
+            dec_inp = [tf.convert_to_tensor(x) for x in dec_inp]
             outs[data] = self.func(dec_inp)
         return ins, outs
 
@@ -1395,8 +1397,10 @@ class Autoencoder(Serial):
             enc_inp = [ins[data]]
             if self.condEncoder:
                 enc_inp += conds
+            enc_inp = [tf.convert_to_tensor(x) for x in enc_inp]
             Z = self.encoder.predict(enc_inp, mean=mean)
             dec_inp = [Z] + conds
+            dec_inp = [tf.convert_to_tensor(x) for x in dec_inp]
             rec = self.decoder.predict(dec_inp, mean=mean)
             outs[data] = rec
         return ins, outs

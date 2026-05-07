@@ -63,10 +63,10 @@ class Sampling(keras.layers.Layer):
     """
     def call(self, inputs):
         z_mean, z_log_var = inputs
-        batch = tf.shape(z_mean)[0]
-        dim = tf.shape(z_mean)[1]
-        epsilon = keras.backend.random_normal(shape=(batch, dim))
-        return z_mean + tf.exp(0.5 * z_log_var) * epsilon
+        batch = keras.ops.shape(z_mean)[0]
+        dim = keras.ops.shape(z_mean)[1]
+        epsilon = keras.random.normal(shape=(batch, dim))
+        return z_mean + keras.ops.exp(0.5 * z_log_var) * epsilon
 
 
 class GaussianEncoder(keras.layers.Layer):
@@ -113,11 +113,11 @@ class GaussianEncoder(keras.layers.Layer):
         self.sampling = Sampling()
 
     def call(self, inputs):
-        out = tf.expand_dims(self.encoder(inputs), axis=-1)
-        z_mean = tf.squeeze(self.z_mean(out), axis=-2)
-        z_log_var = tf.squeeze(self.z_log_var(out), axis=-2)
-        kl_loss = -0.5 * tf.reduce_mean(
-            z_log_var - tf.square(z_mean) - tf.exp(z_log_var) + 1
+        out = keras.ops.expand_dims(self.encoder(inputs), axis=-1)
+        z_mean = keras.ops.squeeze(self.z_mean(out), axis=-2)
+        z_log_var = keras.ops.squeeze(self.z_log_var(out), axis=-2)
+        kl_loss = -0.5 * keras.ops.mean(
+            z_log_var - keras.ops.square(z_mean) - keras.ops.exp(z_log_var) + 1
         )
         self.add_loss(kl_loss)
         z = self.sampling([z_mean, z_log_var])

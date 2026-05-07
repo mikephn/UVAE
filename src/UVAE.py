@@ -109,6 +109,35 @@ class UVAE:
             self.optimizers['unsupervised'] = keras.optimizers.Adam(0.001*float(self.hyperparams()['lr_unsupervised']))
             self.optimizers['supervised'] = keras.optimizers.Adam(0.001*float(self.hyperparams()['lr_supervised']))
             self.optimizers['merge'] = keras.optimizers.Adam(0.001*float(self.hyperparams()['lr_merge']))
+            
+            # In Keras 3 we need to assign variables to optimizers once
+            unsup_vars, sup_vars, merge_vars = [], [], []
+            valid_constraints = [c for c in self.allConstraints() if c._inds is not None and type(c) not in [Standardization, Normalization, Labeling]]
+            if skipTrained:
+                valid_constraints = [c for c in valid_constraints if not c.trained]
+            for c in valid_constraints:
+                if c.func is not None:
+                    if isinstance(c, Autoencoder):
+                        unsup_vars.extend(c.func.trainable_weights)
+                    if type(c) is Regression or type(c) is Classification:
+                        sup_vars.extend(c.func.trainable_weights)
+                if c.trainEmbedding and len(c.embedding):
+                    for data in c.embedding:
+                        encoder = c.embedding[data]
+                        if (not encoder.trained) or (not skipTrained):
+                            if encoder.func is not None:
+                                merge_vars.extend(encoder.func.trainable_weights)
+                    if type(c) is Subspace and c.encoder.func is not None:
+                        merge_vars.extend(c.encoder.func.trainable_weights)
+            # Deduplicate by memory ID
+            unsup_vars = list({id(v): v for v in unsup_vars}.values())
+            sup_vars = list({id(v): v for v in sup_vars}.values())
+            merge_vars = list({id(v): v for v in merge_vars}.values())
+            # Pre-build the state of each optimizer
+            if len(unsup_vars): self.optimizers['unsupervised'].build(unsup_vars)
+            if len(sup_vars): self.optimizers['supervised'].build(sup_vars)
+            if len(merge_vars): self.optimizers['merge'].build(merge_vars)
+
         if valSamplesPerEpoch > 0:
             self.history = History(earlyStop=earlyStopEpochs, earlyStopKey='val_loss')
         else:

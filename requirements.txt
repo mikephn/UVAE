@@ -1,0 +1,9 @@
+tensorflow==2.21.0
+scipy
+pandas
+scikit-learn
+matplotlib
+umap-learn
+scanpy
+arm-mango
+harmonypy

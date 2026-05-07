@@ -33,7 +33,7 @@ Currently column data is supported.
 
 #### 1.1 Dependencies
 
-`tensorflow==2.10.1 scipy` 
+`tensorflow==2.21.0 scipy` 
 
 Optional (Python):
 
@@ -45,6 +45,7 @@ Optional (Python):
 
 `matplotlib umap-learn` for visualisation.
 
+You can use `pip install -r requirements.txt` to install Python dependencies.
 
 Optional (R):
 

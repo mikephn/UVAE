@@ -5,6 +5,7 @@ import umap, re
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import pandas as pd
 
 def plotsCallback(uv, doUmap=False, outFolder=None, n_samples=20000, dataMap=None, showSamplesOf='2D', plotLabels:list=None, um=None, ep=None):
     """
@@ -131,7 +132,7 @@ def savePlot(emb, labs, path, refLabs=None, title=None, size=0.1, quantile=0.999
         legend = False
     if refLabs is None:
         refLabs = list(set(labs))
-        refLabs.sort(key=lambda s: [int(t) if t.isdigit() else t.lower() for t in re.split('(\d+)', str(s))])
+        refLabs.sort(key=lambda s: [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', str(s))])
 
     xmin = np.quantile(emb[:, 0], 1-quantile)
     xmax = np.quantile(emb[:, 0], quantile)
@@ -296,6 +297,7 @@ def gmmClustering(X, path, B=None, comps=[10], cov='full', subsample=100000):
                 b_res = clst[ci][b].fit_predict(b_X)
                 res[mask] = b_res + int(bi * n_c)
             results.append(res)
+    ensureFolder(os.path.dirname(path))
     doPickle(clst, path)
     return results
 
