@@ -23,7 +23,7 @@
 
 ## 1 Introduction
 
-UVAE is a deep learning framework for training autoencoder-based latent variable models through simple description of modelling objectives.
+UVAE is a deep learning framework for training autoencoder-based latent variable models through simple description of modelling objectives. The method has been published in the paper [Integration of unpaired and heterogeneous clinical flow cytometry data](https://www.cell.com/iscience/fulltext/S2589-0042(26)00312-3).
 
 You can create models to automatically integrate disjoint data streams (characterised by different feature sets), correct batch effects, perform regression, classification, and imputation over the joint latent space.
 
